@@ -18,30 +18,16 @@ All public facing functions and classes in our package are documented in our [re
 
 ## Quickstart
 
-To use the package, simply download the source code from the [GitHub repository](https://github.com/ACSVMath/sage_periods), then import the commands from the package.
-
+To install the package from the source code, clone the [GitHub repository](https://github.com/ACSVMath/sage_periods) and run the command
+```sh
+sage -pip install .
 ```
-
-from sage_periods import compute_diagonal_annihilator
-
-``` 
-
-!!! warning
-   
-      Make sure you're running SageMath from the same directory where the source code folder is located.
-
-<!-- TODO: Add to Pip. Once we're ready for the 0.1.0 version + have workflows set up for this. -->
-<!-- The easiest way to install the latest released version of the package
-is via PyPI simply by running
-
+from the root directory (the directory containing the `pyproject.toml` file). 
+Alternatively, to install the latest version of the main branch directly from
+the GitHub repository, run
+```sh
+sage -pip install git+https://github.com/ACSVMath/sage_periods.git
 ```
-sage -pip install sage-periods
-```
-or, alternatively, executing a cell containing
-```
-%pip install sage-periods
-```
-in a SageMath Jupyter notebook. -->
 
 ## Examples
 
