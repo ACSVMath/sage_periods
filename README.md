@@ -34,16 +34,16 @@ sage -pip install git+https://github.com/ACSVMath/sage_periods.git
 
 ## Example of Use
 
-After installation the computation
-```
+After installing the package, the computation
 
+```
 sage: from sage_periods import compute_diagonal_annihilator
 sage: var('x y')
 sage: F = 1/(1-x-y)
 sage: compute_diagonal_annihilator(F)
 (t - 1/4)*Dt + 1/2
-
 ``` 
+
 shows that the main diagonal 
 
 $$ S(t) = \sum_{n \geq 0}\binom{2n}{n}t^n = (1-4t)^{-1/2}$$ 
