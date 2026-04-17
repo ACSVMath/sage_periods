@@ -36,7 +36,7 @@ sage: compute_diagonal_annihilator(F)
 ``` 
 shows that the main diagonal 
 
-$$ S(t) = \sum_{n \geq 0}\binom{2n}{n} = (1-4t)^{-1/2}$$ 
+$$ S(t) = \sum_{n \geq 0}\binom{2n}{n}t^n = (1-4t)^{-1/2}$$ 
 
 of $1/(1-x-y)$ satisfies $(t-1/4)S'(t) + (1/2)S(t) = 0$.
 
