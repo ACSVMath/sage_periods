@@ -1,0 +1,21 @@
+[project]
+name = "sage-periods"
+version = "0.1.0"
+authors = [
+  {name = "John Hunn Smith", email = "j47smith@uwaterloo.ca"},
+  {name = "Stephen Melczer", email = "smelczer@uwaterloo.ca"},
+]
+
+description = "A SageMath Package to compute rational diagonals and periods"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.urls]
+homepage = "https://acsvmath.github.io/sage_periods/"
+repository = "https://github.com/ACSVMath/sage_periods"
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

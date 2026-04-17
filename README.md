@@ -18,16 +18,26 @@ with the [sage-acsv](https://github.com/ACSVMath/sage_acsv) and
 
 ## Quickstart
 
-The easiest way to use the package is simply to run a Jupyter notebook from this
-directory and import the needed commands, such as
-
+To install the package from the source code, clone the git repository and run the command
 ```sh
-from sage_periods import compute_diagonal_annihilator
+sage -pip install .
+```
+from the root directory (the directory containing the `pyproject.toml` file).
+
+For development, use `sage -pip install -e .` for an editable installation.
+
+Alternatively, to install the latest version of the main branch directly from
+the GitHub repository, run
+```sh
+sage -pip install git+https://github.com/ACSVMath/sage_periods.git
 ```
 
-For instance, after this import the computation
+## Example of Use
+
+After installation the computation
 ```
 
+sage: from sage_periods import compute_diagonal_annihilator
 sage: var('x y')
 sage: F = 1/(1-x-y)
 sage: compute_diagonal_annihilator(F)
