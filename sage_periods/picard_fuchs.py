@@ -25,7 +25,7 @@ from . import _is_ore_algebra_installed
 if _is_ore_algebra_installed:
     from ore_algebra import OreAlgebra
 else:
-    print("Warning: 'ore_algebra' is not installed. Operators will be output as polynomials in Q[Dt][t]. Some features may be disabled.")
+    print("Warning: 'ore_algebra' is not installed. Operators will be output as polynomials in Q[t][Dt]. Some features may be disabled.")
 
 from sage.misc.verbose import verbose, set_verbose
 
