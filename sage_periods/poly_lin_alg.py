@@ -168,6 +168,7 @@ def mons_in_ring_order(L):
     """
     if not L:
         return []
+    A = L[0].parent()
 
     mons = set()
     for p in L:

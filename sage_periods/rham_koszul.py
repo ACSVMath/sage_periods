@@ -462,7 +462,7 @@ def basis_U(U, r, q):
         rels = elementary_reduction_step(U, U.basisWdown[(r - 1, q + U.deg)])
 
         # Echelonize together the previous degree-q slice and the newly produced relations.  
-        new = echelonized_basis_poly(U.basis_U[(r-1,q)]+rels, U.xring, return_matrix=False)
+        new = echelonized_basis_poly(U.basis_U[(r-1,q)]+rels, return_matrix=False)
 
         # Split the resulting echelon basis into the exact-degree-q pivot part and the strict lower-degree tail.
         U.basis_U[(r, q)], U.basisWdown[(r, q)] = [p for p in new if p.degree() == q], [p for p in new if p.degree() < q]
