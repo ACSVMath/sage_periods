@@ -136,7 +136,13 @@ class RhamKoszulData:
         self.syz = [p for p in self.jac if p.degree(u) < n]
 
         # Generate Groebner basis for lms of Trivial Syzygies
-        triv_syz = [self.df[i] * self.gens[j] - self.df[j] * self.gens[i] for i in range(n) for j in range (n)] + xrels
+        triv_syz = [
+            self.df[i] * self.gens[j+1] - 
+            self.df[j] * self.gens[i+1] 
+            for i in range(n) 
+            for j in range (n)
+            if i!=j
+            ] + xrels
         self.tsyzlm = list(self.xring.ideal([p.lm() for p in triv_syz]).groebner_basis()) if triv_syz else []
 
 @dataclass(slots=True)

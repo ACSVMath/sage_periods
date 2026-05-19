@@ -332,6 +332,6 @@ def linear_normal_form_p(L0 , M, reduce):
 
     if reduce:
         # Optinally normalize the residual family itself
-        L = echelonized_basis_poly(L,L[0].parent(),False)
+        L = echelonized_basis_poly(L,False)
     
     return L

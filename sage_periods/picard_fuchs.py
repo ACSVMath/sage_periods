@@ -103,7 +103,7 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
             assert len(r) == len(vari), "Direction vector r must have same length as the number of variables."
         assert all(isinstance(x,int) or isinstance(x,Integer) for x in r), "Direction vector r must be a list of integers."
         assert (0 not in r) and (Integer(0) not in r), "Cannot have zero entry in r; anyhow, this is isomorphic to the case in d-1 variables."
-        
+        assert all( ri > 0 or ri > Integer(0) for ri in r), "Cannot have a negative integer coordinate in r."
     else:
         d = len(R.variables())
         r = [1]*d
@@ -123,9 +123,9 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
         if r == None or all(r[i] == 1 or r[i] == Integer(1) for i in range(d)):
             return compute_period_annihilator(R, t, Dt)
         else:
-            compute_period_annihilator(SR(0), t, Dt)
+            return compute_period_annihilator(SR(0), t, Dt)
 
-    if r[0] > 0:
+    if r[0] > 1:
         # Build root of unity filter / first-coordinate section of F over cyclotomic field over $\zeta$,
         # where $\zeta$ is a primitive r1-th root of unity.
         m = r[0]
