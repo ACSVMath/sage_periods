@@ -9,6 +9,8 @@ from sage.rings.integer import Integer
 from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
 from sage.rings.rational_field import QQ
 from sage.symbolic.ring import SR
+from sage.rings.polynomial.ore_polynomial_ring import OrePolynomialRing
+from sage.misc.reset import reset
 from sage.rings.integer_ring import ZZ
 from sage.misc.misc_c import prod
 from sage.arith.misc import random_prime
@@ -25,7 +27,7 @@ from . import _is_ore_algebra_installed
 if _is_ore_algebra_installed:
     from ore_algebra import OreAlgebra
 else:
-    print("Warning: 'ore_algebra' is not installed. Operators will be output as polynomials in Q[t][Dt]. Some features may be disabled.")
+    print("Warning: 'ore_algebra' is not installed. Operators will be output as dense univariate OrePolynomials in Q[t][Dt]. Some features may be disabled.")
 
 from sage.misc.verbose import verbose, set_verbose
 
@@ -36,15 +38,15 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
 
     INPUT:
 
-    * ``R`` -- A symbolic rational function.
+    * ``R`` -- A rational function, either an element of ``SymbolicRing`` or the Fraction Field of a Multivariate Polynomial Ring.
     * ``r`` -- (Optional) A vector of integers specifying the direction of the diagonal, taken as the all ones vector if not specified.
-    * ``vari`` -- (Optional) A vector of all symbolic variables in ``R``, used to fix the order of the variables for computation. Taken as ``R.variables()`` if not specified.
+    * ``vari`` -- (Optional) A vector of all variables appearing in ``R``, used to fix the order of the variables for computation. Taken as ``R.variables()`` if not specified.
     * ``Dt`` -- (Optional) The name for the differential symbol in the output, taken as ``Dt`` by default.
     * ``t`` -- (Optional) The name for the variable in the output, taken as ``t`` by default.
 
     OUTPUT:
 
-    * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that annihilates the $r$-diagonal of ``R`` or, if ``ore_algebra`` is not available, an element of ``QQ[Dt][t]`` representing this operator.
+    * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that annihilates the $r$-diagonal of ``R`` or, if ``ore_algebra`` is not available, an element of the ``OrePolynomialRing`` over ``QQ[t]`` with derivation ``Dt``
     
     EXAMPLES:
 
@@ -68,17 +70,22 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
         (243*z^8 - 810*z^7 + 837*z^6 - 2412*z^5 - 1779*z^4 - 202*z^3 + 27*z^2)*Dz^3 + (2187*z^7 - 4617*z^6 + 972*z^5 - 594*z^4 - 5661*z^3 - 1557*z^2 + 54*z)*Dz^2 + (4374*z^6 - 3888*z^5 - 4374*z^4 + 3168*z^3 + 2010*z^2 - 1296*z + 6)*Dz + 1458*z^5 + 486*z^4 - 1296*z^3 - 1368*z^2 + 750*z - 30
 
     If the ``ore_algebra`` package is not installed, a warning will be displayed
-    and results will be returned as a polynomial in ``t`` and ``Dt``
+    and results will be returned as an ``OrePolynomial`` in ``t`` and ``Dt``
 
         sage: from sage_periods import compute_diagonal_annihilator
         sage: var('t x y')
         sage: F = 1/(1-x-y-x*y**3)
         sage: L = compute_diagonal_annihilator(F)
         sage: L
-        Warning: 'ore_algebra' is not installed. Operators will be output as polynomials in t, Dt. Some features may be disabled.
+        Warning: Warning: 'ore_algebra' is not installed. Operators will be output as dense univariate OrePolynomials in Q[t][Dt]. Some features may be disabled.
         (t^6 + 2/3*t^5 + 5/9*t^4 + 4/9*t^3 - 1/9*t^2 - 2/81*t + 1/243)*Dt^2 + (4*t^5 + 10/3*t^4 + 8/9*t^2 - 4/27*t + 2/81)*Dt + 2*t^4 + 2*t^3 - 2/3*t^2 - 2/27*t - 8/81
         sage: L.parent()
-        Univariate Polynomial Ring in Dt over Univariate Polynomial Ring in t over Rational Field
+        Ore Polynomial Ring in Dt over Univariate Polynomial Ring in t over Rational Field twisted by d/dt
+
+        !!! warning
+            In particular, ``OrePolynomial`` have no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It instead will return an error.
+
+            This is one (of several) fundamental limitations of the ``OrePolynomialRing`` class, hence why we recommend using ``OreAlgebra``.
 
     """
     
@@ -89,6 +96,10 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
     if t != None and Dt == None:
         Dt = f"D{t}"
 
+    # Build "R.variables()" surrogate if we're not in SR
+    if R.parent() != SR:
+        Rvariables_poly = sum(set(R.numerator().variables()).union(R.denominator().variables())).monomials()
+
     # Default behavior if the user does not pass t nor Dt
     if t == None and Dt == None:
         t = var('t')
@@ -98,27 +109,42 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
     if r != None:
         d = len(r)
         if vari == None:
-            print(f"WARNING: You specified a direction vector but not a list of variables. The ordering {R.variables()} will be used")
+            if R.parent() == SR:
+                print(f"WARNING: You specified a direction vector but not a list of variables. The ordering {R.variables()} will be used")
+            else:
+                print(f"WARNING: You specified a direction vector but not a list of variables. The ordering {Rvariables_poly} will be used")
         else:
             assert len(r) == len(vari), "Direction vector r must have same length as the number of variables."
         assert all(isinstance(x,int) or isinstance(x,Integer) for x in r), "Direction vector r must be a list of integers."
         assert (0 not in r) and (Integer(0) not in r), "Cannot have zero entry in r; anyhow, this is isomorphic to the case in d-1 variables."
         assert all( ri > 0 or ri > Integer(0) for ri in r), "Cannot have a negative integer coordinate in r."
     else:
-        d = len(R.variables())
+        if R.parent() == SR: 
+            d = len(R.variables())
+        else:
+            d = len(Rvariables_poly)
         r = [1]*d
 
     if vari != None:
-        assert all(x.parent() == SR for x in vari), "Variable list must contain symbolic variables."
-        assert set(vari) == set(R.variables()) and len(vari) == d, "vari must contain exactly the variables appearing in R (except t)."
+        assert all(x.parent() == SR for x in vari) or all(x in R.parent().gens() for x in vari), "Variable list must contain all symbolic variables or generators of R's parent."
+        assert (set(vari) == set(R.variables())  or set(vari) == set(Rvariables_poly)) and len(vari) == d, "vari must contain exactly the variables appearing in R (except t)."
     else:
-        vari = R.variables()
+        if R.parent() == SR:
+            vari = R.variables()
+        else:
+            vari = Rvariables_poly
 
     # Corner case: If R is constant then either:
     # - We didn't pass in r, in which case we want the main diagonal.
     # - R is its own diagonal, if we passed in r = (1...1)
     # - R's diagonal is zero, if we passed in different r.
-    # TODO: Just return Dt in the appropriate ring
+
+    # If our R was passed in as a multivariate polynomial fraction field element, just cast it back to symbolic ring.
+    # Note: This introduces symbolic variables. Clear them before returning.
+    if R.parent() != SR:
+        sym_vari = [var(sym) for sym in [ str(x) for x in R.parent().gens()]]
+        R = SR(R)
+    
     if R.numerator().is_constant() and R.denominator().is_constant():
         if r == None or all(r[i] == 1 or r[i] == Integer(1) for i in range(d)):
             return compute_period_annihilator(R, t, Dt)
@@ -145,6 +171,9 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
         G = G.subs({ vari[0] : t})
 
     # Obtain an annihilating operator for the r-diagonal of R as a period annihilator of G
+    if R.parent() != SR:
+        for x in sym_vari:
+            reset(str(x))
     return compute_period_annihilator(G, t, Dt)
 
     
@@ -155,8 +184,8 @@ def compute_period_annihilator(R, t, Dt):
 
     INPUT:
 
-    * ``R`` -- A symbolic rational function in $\mathbb{Q}(t)(x_1,...,x_n)$.
-    * ``t`` -- A symbolic variable appearing in `R` which will name the output.
+    * ``R`` -- A rational function in $\mathbb{Q}(t)(x_1,...,x_n)$, either an element of ``SymbolicRing`` or the Fraction Field over a Multivariate Polynomial Ring in variables including $t$.
+    * ``t`` -- A variable (either symbolic or a generator) appearing in `R` which names the output.
     * ``Dt`` -- A string used to name the operator for differentiation with respect to ``t``.
 
     OUTPUT:
@@ -196,10 +225,10 @@ def compute_period_annihilator(R, t, Dt):
             sage: F = 1/(1-x-y-x*y**3)
             sage: L = compute_period_annihilator(F,x,'Dx')
             sage: L
-            Warning: 'ore_algebra' is not installed. Operators will be output as polynomials in t, Dt. Some features may be disabled.
+            Warning: 'ore_algebra' is not installed. Operators will be output as dense univariate OrePolynomials in Q[t][Dt]. Some features may be disabled.
             (x^5 - 7/3*x^4 + 5/3*x^3 - 5/27*x^2 - 4/81*x)*Dx^2 + (4*x^4 - 20/3*x^3 + 10/3*x^2 - 20/27*x - 2/81)*Dx + 2*x^3 - 2*x^2 + 2/3*x - 2/27
             sage: L.parent()
-            Univariate Polynomial Ring in Dx over Univariate Polynomial Ring in x over Rational Field
+            Ore Polynomial Ring in Dx over Univariate Polynomial Ring in x over Rational Field twisted by d/dx
 
     """
     verbose(f"Computing operator annihilating residue of {R}", level=1)
@@ -211,6 +240,14 @@ def compute_period_annihilator(R, t, Dt):
         * Collect all algebraic irrational coefficients found in R and build a finite algebraic extension over QQ, 
         then use this to make K.
     '''
+    
+    # If we're passed in a non-SR R, verify assumptions on it, then put us into the symbolic ring.
+    # Laziness
+    if R.parent() != SR:
+        assert t in R.parent().gens(), "t must be a generator of the parent of R."
+        sym_vari = [var(sym) for sym in [ str(x) for x in R.parent().gens() if x != t]]
+        t = var(str(t))
+        R = SR(R)
     
     # Define base field and set up variables in Sage
     F = QQ  
@@ -225,8 +262,16 @@ def compute_period_annihilator(R, t, Dt):
         raise Exception("Please pick a different variable name. Can't use extra_var in input R, since it's reserved for homogenization.")
     A = PolynomialRing(K,vari+[extra_var],len(vari)+1, order="degrevlex")
     B = A.fraction_field()
-    R = B(R)
 
+    # Cast R into B; free symbolic variables, if we created them.
+    if R.parent() != SR:
+        reset(str(t_symbolic))
+        for x in sym_vari:
+            reset(str(x))
+        R = B(R)
+    else:
+        R = B(R)
+    
     # Prepare our rational function
     Fhom = compute_homogenization(R)
     a,f,q = compute_prepared_fraction(Fhom)
@@ -244,6 +289,7 @@ def compute_period_annihilator(R, t, Dt):
         Dt = Alg.gen()
     else:
         Alg = PolynomialRing(_A_iso, Dt,order='degrevlex')
+        Alg = OrePolynomialRing(_A_iso, _A_iso.derivation(), Dt)
         Dt = Alg.gen()
 
     verbose("Starting to compute Picard-Fuchs operator using evaluation-interpolation.",level=1)
