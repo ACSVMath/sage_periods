@@ -72,17 +72,18 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
     If the ``ore_algebra`` package is not installed, a warning will be displayed
     and results will be returned as an ``OrePolynomial`` in ``t`` and ``Dt``
 
-        sage: from sage_periods import compute_diagonal_annihilator
-        sage: var('t x y')
-        sage: F = 1/(1-x-y-x*y**3)
-        sage: L = compute_diagonal_annihilator(F)
-        sage: L
-        Warning: Warning: 'ore_algebra' is not installed. Operators will be output as dense univariate OrePolynomials in Q[t][Dt]. Some features may be disabled.
+            sage: from sage_periods import compute_diagonal_annihilator
+            sage: var('t x y')
+            sage: F = 1/(1-x-y-x*y**3)
+            sage: L = compute_diagonal_annihilator(F)
+            sage: L
+            Warning: 'ore_algebra' is not installed. Operators will be output as dense univariate OrePolynomials in Q[t][Dt]. Some features may be disabled.
         (t^6 + 2/3*t^5 + 5/9*t^4 + 4/9*t^3 - 1/9*t^2 - 2/81*t + 1/243)*Dt^2 + (4*t^5 + 10/3*t^4 + 8/9*t^2 - 4/27*t + 2/81)*Dt + 2*t^4 + 2*t^3 - 2/3*t^2 - 2/27*t - 8/81
-        sage: L.parent()
-        Ore Polynomial Ring in Dt over Univariate Polynomial Ring in t over Rational Field twisted by d/dt
+            sage: L.parent()
+            Ore Polynomial Ring in Dt over Univariate Polynomial Ring in t over Rational Field twisted by d/dt
 
     !!! warning
+    
         In particular, ``OrePolynomial`` has no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It will instead return an error.
         This is one of several limitations of the ``OrePolynomialRing`` class, hence why we recommend ``OreAlgebra``.
 
@@ -229,6 +230,7 @@ def compute_period_annihilator(R, t, Dt):
             Ore Polynomial Ring in Dx over Univariate Polynomial Ring in x over Rational Field twisted by d/dx
 
     !!! warning
+    
         In particular, ``OrePolynomial`` has no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It will instead return an error.
         This is one of several limitations of the ``OrePolynomialRing`` class, hence why we recommend ``OreAlgebra``.
 
