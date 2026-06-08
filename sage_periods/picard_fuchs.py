@@ -46,7 +46,7 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
 
     OUTPUT:
 
-    * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that annihilates the $r$-diagonal of ``R`` or, if ``ore_algebra`` is not available, an element of the ``OrePolynomialRing`` over ``QQ[t]`` with derivation ``Dt``
+    * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that annihilates the $r$-diagonal of ``R`` or, if ``ore_algebra`` is not available, an element of the ``OrePolynomialRing`` over ``QQ[t]`` with derivation symbol ``Dt``
     
     EXAMPLES:
 
@@ -82,10 +82,9 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
         sage: L.parent()
         Ore Polynomial Ring in Dt over Univariate Polynomial Ring in t over Rational Field twisted by d/dt
 
-        !!! warning
-            In particular, ``OrePolynomial`` have no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It instead will return an error.
-
-            This is one (of several) fundamental limitations of the ``OrePolynomialRing`` class, hence why we recommend using ``OreAlgebra``.
+    !!! warning
+        In particular, ``OrePolynomial`` has no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It will instead return an error.
+        This is one of several limitations of the ``OrePolynomialRing`` class, hence why we recommend ``OreAlgebra``.
 
     """
     
@@ -192,7 +191,7 @@ def compute_period_annihilator(R, t, Dt):
 
     * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that 
     annihilates the residue of ``R`` with respect to $x_1,...,x_n$ or, if ``ore_algebra`` 
-    is not available, an element of ``QQ[Dt][t]`` representing this operator.
+    is not available, an element of the ``OrePolynomialRing`` over ``QQ[t]`` with derivation symbol ``Dt``
 
     EXAMPLES:
 
@@ -217,8 +216,7 @@ def compute_period_annihilator(R, t, Dt):
             (t^8 - 257551/5980*t^7 + 434946/1495*t^6 + 374641/598*t^5 - 528511/1495*t^4 + 58941/5980*t^3)*Dt^4 + (170/13*t^7 - 2993981/5980*t^6 + 5837574/1495*t^5 + 8354793/2990*t^4 - 3626052/1495*t^3 + 54575/1196*t^2)*Dt^3 + (565/13*t^6 - 8477641/5980*t^5 + 68078253/5980*t^4 - 4844873/5980*t^3 - 20736217/5980*t^2 + 6549/230*t)*Dt^2 + (475/13*t^5 - 2841061/2990*t^4 + 10195067/1495*t^3 - 92604/23*t^2 - 15836/23*t - 2183/598)*Dt + 53/13*t^4 - 223701/2990*t^3 + 864791/2990*t^2 - 815887/2990*t + 10915/598
 
     If the ``ore_algebra`` package is not installed, a warning will be displayed
-    and results will be returned as a polynomial in ``Dt`` whose coefficients are
-    polynomials in ``t``.
+    and results will be returned as an ``OrePolynomial`` in ``t`` and ``Dt``:
 
             sage: from sage_periods import compute_period_annihilator
             sage: var('t x y')
@@ -229,6 +227,10 @@ def compute_period_annihilator(R, t, Dt):
             (x^5 - 7/3*x^4 + 5/3*x^3 - 5/27*x^2 - 4/81*x)*Dx^2 + (4*x^4 - 20/3*x^3 + 10/3*x^2 - 20/27*x - 2/81)*Dx + 2*x^3 - 2*x^2 + 2/3*x - 2/27
             sage: L.parent()
             Ore Polynomial Ring in Dx over Univariate Polynomial Ring in x over Rational Field twisted by d/dx
+
+    !!! warning
+        In particular, ``OrePolynomial`` has no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It will instead return an error.
+        This is one of several limitations of the ``OrePolynomialRing`` class, hence why we recommend ``OreAlgebra``.
 
     """
     verbose(f"Computing operator annihilating residue of {R}", level=1)
