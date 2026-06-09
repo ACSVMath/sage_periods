@@ -279,7 +279,23 @@ def compute_period_annihilator(R, t, Dt):
     # Prepare our rational function
     Fhom = compute_homogenization(R)
     a,f,q = compute_prepared_fraction(Fhom)
+    # If extra_var divides f, then it is the case that homogenizing preserves picard fuchs equation.
+    # Check this, and if not, renormalize so this is so.
+    h = A.gens()[-1]
+    if f.subs({h: 0}) != 0:
+        verbose(
+            f"Homogenizing variable {h} does not divide f; replacing "
+            f"(a, f, q) by ({h}^{q}*a, {h}*f, q).",
+            level=1,
+        )
+        a = A(h**q * a)
+        f = A(h * f)
+    
+    assert f.subs({h: 0}) == 0
+    assert a.is_homogeneous()
+    assert f.is_homogeneous()
     verbose(f"The prepared fraction has the form (a,f,q) = {(a,f,q)}",level=1)
+    
 
     # Build OreAlgebra object associated with this ring (if possible)
     # First, "recast" A as the poly ring in t over F[x_0,...,x_n]
