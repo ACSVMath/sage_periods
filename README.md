@@ -5,8 +5,11 @@ algorithms for computing annihilating linear differential equations
 for diagonals and period integrals of multivariate rational functions.
 
 The package works with any reasonably recent version of SageMath, we
-recommend to have SageMath 10.1 or newer.
-Documentation is available at <https://acsvmath.github.io/sage_periods/>.
+recommend to have SageMath 10.2 or newer.
+Documentation is available at <https://acsvmath.github.io/sage_periods/>. 
+
+See also the [extended abstract from ICMS 2026](/papers/MelczerSmith26.pdf)
+describing the package.
 
 Our methods are based on the [MAGMA period package](https://github.com/lairez/periods) 
 of [Pierre Lairez](https://mathexp.eu/lairez/) which implements the algorithm described 
