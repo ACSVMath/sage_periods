@@ -3,6 +3,7 @@ Main functions to compute annihilating D-finite operators for diagonals and peri
 """
 
 # Sage package imports
+from sage.all import *
 from sage.rings.finite_rings.finite_field_constructor import GF
 from sage.rings.ideal import Ideal
 from sage.rings.integer import Integer
@@ -32,7 +33,243 @@ else:
 from sage.misc.verbose import verbose, set_verbose
 
 
-def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
+def _prepared_fraction_data(R):
+    """Return ``(a, f, q, factors)`` for a fraction-field element ``R``."""
+    A = R.parent().ring()
+    if R.numerator().degree() <= 0 and R.denominator().degree() == 0:
+        return A(R), A.one(), Integer(1), []
+
+    factorization = list(R.denominator().factor())
+    q = max(exponent for _, exponent in factorization)
+    factors = [factor for factor, _ in factorization]
+    f = A(prod(factors))
+    return A(f**q * R), f, q, factors
+
+
+def _diagonal_integrand(R, r, vari, pivot_index, t):
+    """Construct the diagonal period integrand for one pivot."""
+    order = [pivot_index] + [i for i in range(len(r)) if i != pivot_index]
+    ordered_vari = [vari[i] for i in order]
+    ordered_r = [r[i] for i in order]
+    pivot, *nonpivot_vari = ordered_vari
+    pivot_weight = ordered_r[0]
+
+    if pivot_weight == 1:
+        weighted_product = prod(
+            x**ri for x, ri in zip(nonpivot_vari, ordered_r[1:])
+        )
+        G = R.subs({pivot: pivot / weighted_product})
+    else:
+        G = first_coordinate_section(
+            R, pivot, pivot_weight, u=pivot, vari=ordered_vari
+        )
+        weighted_product = prod(
+            x**(pivot_weight * ri)
+            for x, ri in zip(nonpivot_vari, ordered_r[1:])
+        )
+        G = G.subs({
+            pivot: pivot / weighted_product,
+            **{x: x**pivot_weight for x in nonpivot_vari},
+        })
+
+    G /= prod(nonpivot_vari)
+    return (
+        G.subs({pivot: t, t: pivot})
+        if t in ordered_vari and t != pivot
+        else G.subs({pivot: t})
+    )
+
+
+def _pivot_candidate(G, pivot, t, K, homogenizing_variable):
+    """Prepare one pivot and compute its static complexity metrics."""
+    integration_variables = sorted(
+        (set(G.numerator().variables()) | set(G.denominator().variables())) - {t},
+        key=str,
+    )
+    if homogenizing_variable in integration_variables:
+        raise ValueError(
+            "Please pick a different variable name. Can't use extra_var in "
+            "input R, since it's reserved for homogenization."
+        )
+
+    names = integration_variables + [homogenizing_variable]
+    A = PolynomialRing(K, names, len(names), order="degrevlex")
+    Fhom = compute_homogenization(A.fraction_field()(G))
+    a, f, q, factors = _prepared_fraction_data(Fhom)
+    N = f.degree()
+    n = A.ngens() - 1
+    fdict = f.dict()
+    fdelta = A({
+        monomial: derivative
+        for monomial, coefficient in fdict.items()
+        if (derivative := coefficient.derivative()) != 0
+    })
+
+    leading_coefficient = f.lc()
+    normalized_coefficients = [
+        coefficient / leading_coefficient for coefficient in fdict.values()
+    ]
+    t_degree = max(
+        max(
+            coefficient.numerator().degree(),
+            coefficient.denominator().degree(),
+        )
+        for coefficient in normalized_coefficients
+    )
+    moving_components = 0
+    for factor in factors:
+        factor_lc = factor.lc()
+        moving_components += any(
+            (coefficient / factor_lc).derivative() != 0
+            for coefficient in factor.dict().values()
+        )
+
+    return {
+        "pivot": pivot,
+        "integrand": G,
+        "a": a,
+        "f": f,
+        "fdelta": fdelta,
+        "static": (
+            binomial(q * N - 1, n),
+            q,
+            N,
+            len(fdelta.dict()),
+            t_degree,
+            moving_components,
+        ),
+    }
+
+
+def _pareto_front(candidates):
+    """Discard candidates dominated componentwise in their static metrics."""
+    def dominates(left, right):
+        comparisons = [
+            x <= y for x, y in zip(left["static"], right["static"])
+        ]
+        return all(comparisons) and left["static"] != right["static"]
+
+    return [
+        candidate
+        for candidate in candidates
+        if not any(
+            other is not candidate and dominates(other, candidate)
+            for other in candidates
+        )
+    ]
+
+
+def _evaluate_polynomial_mod_p(poly, target_ring, point, field):
+    """Evaluate the coefficient field parameter of ``poly`` modulo ``p``."""
+    return target_ring({
+        monomial: (
+            field(coefficient.numerator()(point))
+            / field(coefficient.denominator()(point))
+        )
+        for monomial, coefficient in poly.dict().items()
+    })
+
+
+def _gauss_manin_pilot(candidate, prime, attempts=12):
+    """Return a two-specialization score ``(|M|, nnz(B), ...)`` or ``None``."""
+    A = candidate["a"].parent()
+    field = GF(prime)
+    target_ring = A.change_ring(field)
+    results = []
+    used_points = set()
+
+    for _ in range(attempts):
+        if len(results) == 2:
+            break
+        point = ZZ.random_element(1, prime)
+        if point in used_points:
+            continue
+        used_points.add(point)
+
+        try:
+            feval = _evaluate_polynomial_mod_p(
+                candidate["f"], target_ring, point, field
+            )
+            fdeltaeval = _evaluate_polynomial_mod_p(
+                candidate["fdelta"], target_ring, point, field
+            )
+            aeval = _evaluate_polynomial_mod_p(
+                candidate["a"], target_ring, point, field
+            )
+            result = gauss_manin_helper(
+                RhamKoszulData(feval, r=1), fdeltaeval, [aeval]
+            )
+        except RuntimeError as error:
+            if str(error) == "INCREASE_R":
+                return None
+            raise
+        except Exception as error:
+            verbose(
+                f"Discarding pivot pilot point {point}: {error}", level=2
+            )
+            continue
+
+        results.append((len(result.basis), len(result.gm.dict()), result.ebasis))
+
+    if len(results) < 2:
+        return None
+
+    basis_sizes = [size for size, _, _ in results]
+    nonzero_counts = [nonzero for _, nonzero, _ in results]
+    return (
+        max(basis_sizes),
+        max(nonzero_counts),
+        int(results[0][2] != results[1][2]),
+        sum(basis_sizes),
+        sum(nonzero_counts),
+    )
+
+
+def _select_pivot_candidate(candidates, original_pivot, vari):
+    """Apply the static Pareto filter and, if needed, the modular pilot."""
+    for candidate in candidates:
+        verbose(
+            f"Pivot candidate {vari[candidate['pivot']]} "
+            f"(index {candidate['pivot']}) has static metrics "
+            f"{candidate['static']}.",
+            level=1,
+        )
+
+    finalists = _pareto_front(candidates)
+    if len(finalists) == 1:
+        return finalists[0]
+
+    pilot_prime = random_prime(2**20 - 1, proof=True, lbound=2**19)
+    successful = []
+    for candidate in finalists:
+        candidate["pilot"] = _gauss_manin_pilot(candidate, pilot_prime)
+        verbose(
+            f"Pivot candidate {vari[candidate['pivot']]} "
+            f"(index {candidate['pivot']}) has pilot score "
+            f"{candidate['pilot']}.",
+            level=1,
+        )
+        if candidate["pilot"] is not None:
+            successful.append(candidate)
+
+    if not successful:
+        return next(
+            candidate for candidate in candidates
+            if candidate["pivot"] == original_pivot
+        )
+
+    best_score = min(candidate["pilot"] for candidate in successful)
+    tied = [candidate for candidate in successful if candidate["pilot"] == best_score]
+    return next(
+        (
+            candidate for candidate in tied
+            if candidate["pivot"] == original_pivot
+        ),
+        tied[0],
+    )
+
+
+def compute_diagonal_annihilator(R, r=None, vari=None, Dt=None, t=None):
     r"""
     Given a symbolic rational function $R(x_1,...,x_d)$, compute a D-finite equation annihilating the $r$-diagonal of $R$.
 
@@ -40,14 +277,14 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
 
     * ``R`` -- A rational function, either an element of ``SymbolicRing`` or the Fraction Field of a Multivariate Polynomial Ring.
     * ``r`` -- (Optional) A vector of integers specifying the direction of the diagonal, taken as the all ones vector if not specified.
-    * ``vari`` -- (Optional) A vector of all variables appearing in ``R``, used to fix the order of the variables for computation. Taken as ``R.variables()`` if not specified.
+    * ``vari`` -- (Optional) An ordered vector of all variables appearing in ``R``. It is required for a non-main direction and otherwise defaults to the variables detected in ``R``.
     * ``Dt`` -- (Optional) The name for the differential symbol in the output, taken as ``Dt`` by default.
     * ``t`` -- (Optional) The name for the variable in the output, taken as ``t`` by default.
 
     OUTPUT:
 
     * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that annihilates the $r$-diagonal of ``R`` or, if ``ore_algebra`` is not available, an element of the ``OrePolynomialRing`` over ``QQ[t]`` with derivation symbol ``Dt``
-    
+
     EXAMPLES:
 
     Computing the main diagonal annihilator on a typical example.
@@ -83,100 +320,128 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
             Ore Polynomial Ring in Dt over Univariate Polynomial Ring in t over Rational Field twisted by d/dt
 
     !!! warning
-    
+
         In particular, ``OrePolynomial`` has no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It will instead return an error.
         This is one of several limitations of the ``OrePolynomialRing`` class, hence why we recommend ``OreAlgebra``.
 
     """
-    
-    # Basics checks and argument processing
-    assert Dt != 'D', "Please pick a different operator symbol; D is reserved."
-    assert Dt == None or isinstance(Dt,str), "Derivative symbol Dt must be None or a string."
-    assert not(Dt != None and t == None), "If you pass Dt, then you must pass t as well."
-    if t != None and Dt == None:
+    assert Dt != "D", "Please pick a different operator symbol; D is reserved."
+    assert Dt is None or isinstance(Dt, str), (
+        "Derivative symbol Dt must be None or a string."
+    )
+    assert not (Dt is not None and t is None), (
+        "If you pass Dt, then you must pass t as well."
+    )
+
+    if t is None:
+        t, Dt = var("t"), "Dt"
+    elif Dt is None:
         Dt = f"D{t}"
 
-    # Build "R.variables()" surrogate if we're not in SR
-    if R.parent() != SR:
-        Rvariables_poly = sum(set(R.numerator().variables()).union(R.denominator().variables())).monomials()
-
-    # Default behavior if the user does not pass t nor Dt
-    if t == None and Dt == None:
-        t = var('t')
-        Dt = 'Dt'
-
-    # Default behavior if the user does not pass r
-    if r != None:
-        d = len(r)
-        if vari == None:
-            if R.parent() == SR:
-                print(f"WARNING: You specified a direction vector but not a list of variables. The ordering {R.variables()} will be used")
-            else:
-                print(f"WARNING: You specified a direction vector but not a list of variables. The ordering {Rvariables_poly} will be used")
-        else:
-            assert len(r) == len(vari), "Direction vector r must have same length as the number of variables."
-        assert all(isinstance(x,int) or isinstance(x,Integer) for x in r), "Direction vector r must be a list of integers."
-        assert (0 not in r) and (Integer(0) not in r), "Cannot have zero entry in r; anyhow, this is isomorphic to the case in d-1 variables."
-        assert all( ri > 0 or ri > Integer(0) for ri in r), "Cannot have a negative integer coordinate in r."
+    input_is_symbolic = R.parent() == SR
+    if input_is_symbolic:
+        variables_in_R = list(R.variables())
     else:
-        if R.parent() == SR: 
-            d = len(R.variables())
-        else:
-            d = len(Rvariables_poly)
-        r = [1]*d
+        used = set(R.numerator().variables()) | set(R.denominator().variables())
+        variables_in_R = [x for x in R.parent().gens() if x in used]
 
-    if vari != None:
-        assert all(x.parent() == SR for x in vari) or all(x in R.parent().gens() for x in vari), "Variable list must contain all symbolic variables or generators of R's parent."
-        assert (set(vari) == set(R.variables())  or set(vari) == set(Rvariables_poly)) and len(vari) == d, "vari must contain exactly the variables appearing in R (except t)."
+    if r is None:
+        vari = variables_in_R if vari is None else list(vari)
+        r = [Integer(1)] * len(vari)
+        is_main_diagonal = True
     else:
-        if R.parent() == SR:
-            vari = R.variables()
+        assert len(r) > 0, "Direction vector r must be nonempty."
+        assert all(isinstance(ri, (int, Integer)) for ri in r), (
+            "Direction vector r must be a list of integers."
+        )
+        assert all(ri > 0 for ri in r), (
+            "Direction vector r must have strictly positive entries."
+        )
+        r = [Integer(ri) for ri in r]
+        is_main_diagonal = all(ri == 1 for ri in r)
+        if not is_main_diagonal and gcd(r) > 1:
+            print(
+                "Warning: r has nontrivial gcd. Ensure you meant to do this, "
+                "as computations will be slower and operators larger."
+            )
+        if vari is None:
+            assert is_main_diagonal, (
+                "vari must be provided when r is not the all-ones vector."
+            )
+            vari = variables_in_R
         else:
-            vari = Rvariables_poly
+            vari = list(vari)
 
-    # Corner case: If R is constant then either:
-    # - We didn't pass in r, in which case we want the main diagonal.
-    # - R is its own diagonal, if we passed in r = (1...1)
-    # - R's diagonal is zero, if we passed in different r.
+    assert len(vari) == len(r), (
+        "Direction vector r must have the same length as vari."
+    )
+    assert (
+        len(vari) == len(variables_in_R)
+        and len(set(vari)) == len(vari)
+        and set(vari) == set(variables_in_R)
+    ), "vari must contain each variable appearing in R exactly once."
+    assert (
+        all(x.parent() == SR for x in vari)
+        if input_is_symbolic
+        else all(x in R.parent().gens() for x in vari)
+    ), "vari contains variables incompatible with R."
 
-    # If our R was passed in as a multivariate polynomial fraction field element, just cast it back to symbolic ring.
-    # Note: This introduces symbolic variables. Clear them before returning.
-    if R.parent() != SR:
-        sym_vari = [var(sym) for sym in [ str(x) for x in R.parent().gens()]]
+    temporary_symbols = []
+    if not input_is_symbolic:
+        symbolic_generators = {x: var(str(x)) for x in variables_in_R}
+        temporary_symbols = list(symbolic_generators.values())
         R = SR(R)
-    
-    if R.numerator().is_constant() and R.denominator().is_constant():
-        if r == None or all(r[i] == 1 or r[i] == Integer(1) for i in range(d)):
-            return compute_period_annihilator(R, t, Dt)
+        vari = [symbolic_generators[x] for x in vari]
+
+    try:
+        if R.numerator().is_constant() and R.denominator().is_constant():
+            return compute_period_annihilator(
+                R if is_main_diagonal else SR(0), t, Dt
+            )
+
+        minimum_weight = min(r)
+        candidate_pivots = [
+            i for i, ri in enumerate(r) if ri == minimum_weight
+        ]
+        original_pivot = candidate_pivots[0]
+
+        if len(candidate_pivots) == 1:
+            best_pivot = original_pivot
+            best_integrand = _diagonal_integrand(R, r, vari, best_pivot, t)
+            verbose(
+                f"Using the only eligible pivot {vari[best_pivot]} "
+                f"(index {best_pivot}).",
+                level=1,
+            )
         else:
-            return compute_period_annihilator(SR(0), t, Dt)
+            K = PolynomialRing(QQ, t).fraction_field()
+            homogenizing_variable = var("extra_var")
+            candidates = [
+                _pivot_candidate(
+                    _diagonal_integrand(R, r, vari, pivot, t),
+                    pivot,
+                    t,
+                    K,
+                    homogenizing_variable,
+                )
+                for pivot in candidate_pivots
+            ]
+            winner = _select_pivot_candidate(
+                candidates, original_pivot, vari
+            )
+            best_pivot = winner["pivot"]
+            best_integrand = winner["integrand"]
+            verbose(
+                f"Using pivot {vari[best_pivot]} (index {best_pivot}).",
+                level=1,
+            )
 
-    if r[0] > 1:
-        # Build root of unity filter / first-coordinate section of F over cyclotomic field over $\zeta$,
-        # where $\zeta$ is a primitive r1-th root of unity.
-        m = r[0]
-        Rsec = first_coordinate_section(R, vari[0], m, u=vari[0], vari=vari)
-        chvar = [vari[0] / prod(vari[i]**(m * r[i]) for i in range(1, d))] \
-                + [vari[i]**m for i in range(1, d)]
-        G = Rsec.subs({vari[i]: chvar[i] for i in range(d)}) / prod(vari[1:])
-    else:
-        # r[0] = 1 means we can use the usual change of variables formula for G, and sub into F directly.
-        chvar = [vari[0]/prod(vari[i]**(r[i]) for i in range(1,d))] + [vari[i] for i in range(1,d)]
-        G = R.subs({vari[i]: chvar[i] for i in range(d)})/prod(vari[1:]) 
-            
-    # Change the first variable of G to t. If t is provided and is in F, but is not the first variable, then we swap t and vari[0].
-    if t in vari and t != vari[0]:
-        G = G.subs({ vari[0] : t, t:vari[0]})
-    else:
-        G = G.subs({ vari[0] : t})
+        return compute_period_annihilator(best_integrand, t, Dt)
+    finally:
+        for symbol in temporary_symbols:
+            reset(str(symbol))
 
-    # Obtain an annihilating operator for the r-diagonal of R as a period annihilator of G
-    if R.parent() != SR:
-        for x in sym_vari:
-            reset(str(x))
-    return compute_period_annihilator(G, t, Dt)
 
-    
 def compute_period_annihilator(R, t, Dt):
     r"""
     Given a symbolic rational function $R(t,x_1,...,x_n)$, compute a D-finite equation 
@@ -552,53 +817,29 @@ def compute_prepared_fraction(R,t = None):
             (-1, t*x*y - y^2 - 1, 1)
 
     """
-    if R.parent() == SR:
-        is_symbolic = True
-    else:
-        is_symbolic = False
-    
-    assert not (not is_symbolic and t != None), "Only provide t if R is in the Symbolic Ring."
-    assert (not is_symbolic or t != None), "If R is symbolic, please provide the parameter t."
+    is_symbolic = R.parent() == SR
+    assert not (not is_symbolic and t is not None), (
+        "Only provide t if R is in the Symbolic Ring."
+    )
+    assert not (is_symbolic and t is None), (
+        "If R is symbolic, please provide the parameter t."
+    )
+
     if is_symbolic:
-        # Need to build the fraction ring and evaluate R
-        F = QQ 
-        K = PolynomialRing(F,t).fraction_field()
         t_symbolic = t
-        t = K.gen()
-        vari = sorted((set(R.numerator().variables()) | set(R.denominator().variables())) - {t_symbolic},key=str)
-        A = PolynomialRing(K,vari,len(vari), order="degrevlex")
-        B = A.fraction_field()
-        R = B(R)
-    else:
-        B = R.parent()
-        A = B.ring()
+        K = PolynomialRing(QQ, t).fraction_field()
+        variables = sorted(
+            (
+                set(R.numerator().variables())
+                | set(R.denominator().variables())
+            ) - {t_symbolic},
+            key=str,
+        )
+        A = PolynomialRing(K, variables, len(variables), order="degrevlex")
+        R = A.fraction_field()(R)
 
-    # Corner case: Constant R. Need this so max() doesn't throw an error.
-    if R.numerator().degree() <= 0 and R.denominator().degree() == 0:
-        a = A(R)
-        f = A(1)
-        q = 1
-        if is_symbolic:
-            return SR(a), SR(f), q
-        else:
-            return a,f,q
-
-    vari = B.gens()
-    g = R.numerator()
-    h = R.denominator()
-
-    # Make f squarefree
-    h_factors = h.factor()
-    pairs = list(h_factors)
-    unit = h_factors.unit()
-    
-    q = max(e for _, e in pairs)
-    f = prod(p for p, _ in pairs)
-    a = f**q * R 
-    if is_symbolic:
-        return SR(a), SR(f), q
-    else:
-        return A(a),A(f),q
+    a, f, q, _ = _prepared_fraction_data(R)
+    return (SR(a), SR(f), q) if is_symbolic else (a, f, q)
 
 
 def compute_gauss_manin_connection(a,f,r,p):
@@ -638,6 +879,9 @@ def compute_gauss_manin_connection(a,f,r,p):
     uctr = 0
     gauss_manin_helper_times = []
 
+    fdict = f.dict()
+    fdelta = A({ key: fdict[key].derivative() for key in fdict.keys()}) #f^delta
+
     # Main loop
     while True:
         u = ZZ.random_element(1, p)   # random evaluation point
@@ -653,9 +897,6 @@ def compute_gauss_manin_connection(a,f,r,p):
         uctr += 1
 
         # Try evaluating f, a, f^delta into our ring. If this fails, pick a new point.
-        fdict = f.dict()
-        fdelta = A({ key: fdict[key].derivative() for key in fdict.keys()}) #f^delta
-        
         try:
             feval = AF(SR(f).subs({t:u_QQ}))
             fdeltaeval = AF(SR(fdelta).subs({t:u_QQ}))
