@@ -1,0 +1,11 @@
+.DS_Store
+.ipynb_checkpoints/
+periods_testing.ipynb
+SCRATCH.ipynb
+/sage_periods/__pycache__/
+/.cache
+/.github
+/.ipynb_checkpoints
+/.ruff_cache
+/.venv
+sage_periods.zip

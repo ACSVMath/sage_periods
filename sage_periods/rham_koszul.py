@@ -140,10 +140,10 @@ class RhamKoszulData:
             self.df[i] * self.gens[j+1] - 
             self.df[j] * self.gens[i+1] 
             for i in range(n) 
-            for j in range (n)
-            if i!=j
+            for j in range (i+1,n)
             ] + xrels
-        self.tsyzlm = list(self.xring.ideal([p.lm() for p in triv_syz]).groebner_basis()) if triv_syz else []
+        self.tsyzlm = [p.lm() for p in self.xring.ideal(triv_syz).groebner_basis()] if triv_syz else []
+        
 
 @dataclass(slots=True)
 class RKGaussManinData:

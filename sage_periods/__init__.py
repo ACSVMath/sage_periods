@@ -2,11 +2,10 @@ r"""A SageMath package for computing D-finite equations of rational diagonals an
 
 import importlib.metadata
 # __version__ = importlib.metadata.version(__name__) # TODO: Uncomment this (and delete hardcoded version) after package is uploaded to pip.
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Checks if ore_algebra is installed
 import importlib.util
-
 
 # Check if ore_algebra is installed
 spec = importlib.util.find_spec("ore_algebra")
@@ -27,5 +26,5 @@ __all__ = [
     "compute_homogenization",
     "compute_prepared_fraction",
     "compute_period_annihilator",
-    "compute_diagonal_annihilator"
+    "compute_diagonal_annihilator",
 ]

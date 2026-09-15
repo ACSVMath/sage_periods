@@ -3,24 +3,14 @@ Main functions to compute annihilating D-finite operators for diagonals and peri
 """
 
 # Sage package imports
-from sage.rings.finite_rings.finite_field_constructor import GF
-from sage.rings.ideal import Ideal
-from sage.rings.integer import Integer
-from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
-from sage.rings.rational_field import QQ
-from sage.symbolic.ring import SR
-from sage.rings.polynomial.ore_polynomial_ring import OrePolynomialRing
-from sage.misc.reset import reset
-from sage.rings.integer_ring import ZZ
-from sage.misc.misc_c import prod
-from sage.arith.misc import random_prime
-from sage.calculus.var import var
-from sage.sets.set import Set
+from sage.all import *
 
 # Imports from our modules
-from .helpers import first_coordinate_section
-from .reconstruction import ReconstructionData, compute_reductions_dependency, lift_operator_across_primes, recon_add_rat
-from .rham_koszul import RhamKoszulData, gauss_manin_helper
+# from .reconstruction import ReconstructionData, compute_reductions_dependency, lift_operator_across_primes, recon_add_rat
+# from .rham_koszul import RhamKoszulData, gauss_manin_helper
+from .diagonal import minimize_diagonal_annihilator, diagonal_to_period, normalize_diagonal_arguments
+from .preparation import compute_homogenization, compute_prepared_fraction, minimize_denominator_degree, probe_reduction_order
+from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, lift_operator_across_primes
 
 # Check if ore_algebra is available, and import it if so
 from . import _is_ore_algebra_installed
@@ -32,7 +22,7 @@ else:
 from sage.misc.verbose import verbose, set_verbose
 
 
-def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
+def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, reduction_order = None, minimize = False, certify = False, mindeg = None, ncpus = None):
     r"""
     Given a symbolic rational function $R(x_1,...,x_d)$, compute a D-finite equation annihilating the $r$-diagonal of $R$.
 
@@ -43,11 +33,30 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
     * ``vari`` -- (Optional) A vector of all variables appearing in ``R``, used to fix the order of the variables for computation. Taken as ``R.variables()`` if not specified.
     * ``Dt`` -- (Optional) The name for the differential symbol in the output, taken as ``Dt`` by default.
     * ``t`` -- (Optional) The name for the variable in the output, taken as ``t`` by default.
+    * ``reduction_order`` -- (Optional) The smallest order to start computing the modular Lairez reduction at. When ``None`` is passed in, a small order is selected
+     which is likely to give the best combination of small operator size and small runtime.
+    * ``minimize`` -- (Optional) When ``True`` (and``ore_algebra`` is installed), 
+      recurrence guessing is used to attempt to minimize the operator produced 
+      by vanilla ``compute_diagonal_annihilator``. If this function returns with
+      ``minimize=True``, this certifies that the output annihilates
+      the diagonal and is a right divisor of the operator computed when 
+      ``minimize`` is set to ``False``.
+    * ``certify`` -- (Optional) When ``True``,
+      the partial certificates from Section 7.3 of Lairez are computed and verified
+      for operator annihilating the diagonal, and the pair ``(operator, certificate)`` 
+      is returned. When combined with ``minimize=True``, the returned operator is 
+      certified relative to the pre-minimization operator.
+    * ``mindeg`` -- (Optional) Boolean flag enabling torus
+      change-of-variables preprocessing; see ``compute_period_annihilator``. Can
+      greatly speed up computation.
+    * ``ncpus`` -- (Optional) Parameter specifying number of CPU cores to use for
+      multiprocessing.
 
     OUTPUT:
 
     * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that annihilates the $r$-diagonal of ``R`` or, if ``ore_algebra`` is not available, an element of the ``OrePolynomialRing`` over ``QQ[t]`` with derivation symbol ``Dt``
-    
+    * TODO: Add output and EXAMPLES for certificates and other parameters!
+
     EXAMPLES:
 
     Computing the main diagonal annihilator on a typical example.
@@ -88,96 +97,48 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None):
         This is one of several limitations of the ``OrePolynomialRing`` class, hence why we recommend ``OreAlgebra``.
 
     """
+
+    # Validate inputs and "normalize" arguments so R is symbolic, r and vari are defined
+    # (with vari consisting of "standardized" symbolic variables that can be cleared at the end of compute_period_annihilator),
+    # vari / r - entry order is optimized for minimal complexity in the resulting diagonal transformation,
+    # and t and Dt are defined.
+    R_normalized, r, vari_normalized, Dt, t = normalize_diagonal_arguments(R,r,vari,Dt,t)
     
-    # Basics checks and argument processing
-    assert Dt != 'D', "Please pick a different operator symbol; D is reserved."
-    assert Dt == None or isinstance(Dt,str), "Derivative symbol Dt must be None or a string."
-    assert not(Dt != None and t == None), "If you pass Dt, then you must pass t as well."
-    if t != None and Dt == None:
-        Dt = f"D{t}"
-
-    # Build "R.variables()" surrogate if we're not in SR
-    if R.parent() != SR:
-        Rvariables_poly = sum(set(R.numerator().variables()).union(R.denominator().variables())).monomials()
-
-    # Default behavior if the user does not pass t nor Dt
-    if t == None and Dt == None:
-        t = var('t')
-        Dt = 'Dt'
-
-    # Default behavior if the user does not pass r
-    if r != None:
-        d = len(r)
-        if vari == None:
-            if R.parent() == SR:
-                print(f"WARNING: You specified a direction vector but not a list of variables. The ordering {R.variables()} will be used")
-            else:
-                print(f"WARNING: You specified a direction vector but not a list of variables. The ordering {Rvariables_poly} will be used")
-        else:
-            assert len(r) == len(vari), "Direction vector r must have same length as the number of variables."
-        assert all(isinstance(x,int) or isinstance(x,Integer) for x in r), "Direction vector r must be a list of integers."
-        assert (0 not in r) and (Integer(0) not in r), "Cannot have zero entry in r; anyhow, this is isomorphic to the case in d-1 variables."
-        assert all( ri > 0 or ri > Integer(0) for ri in r), "Cannot have a negative integer coordinate in r."
-    else:
-        if R.parent() == SR: 
-            d = len(R.variables())
-        else:
-            d = len(Rvariables_poly)
-        r = [1]*d
-
-    if vari != None:
-        assert all(x.parent() == SR for x in vari) or all(x in R.parent().gens() for x in vari), "Variable list must contain all symbolic variables or generators of R's parent."
-        assert (set(vari) == set(R.variables())  or set(vari) == set(Rvariables_poly)) and len(vari) == d, "vari must contain exactly the variables appearing in R (except t)."
-    else:
-        if R.parent() == SR:
-            vari = R.variables()
-        else:
-            vari = Rvariables_poly
+    # !! vari and r may be reordered in order to make our diagonal transformation "nicer."
+    # Also, if R was an element in a fraction field, we will have created symbolic variables
+    
 
     # Corner case: If R is constant then either:
     # - We didn't pass in r, in which case we want the main diagonal.
     # - R is its own diagonal, if we passed in r = (1...1)
     # - R's diagonal is zero, if we passed in different r.
-
-    # If our R was passed in as a multivariate polynomial fraction field element, just cast it back to symbolic ring.
-    # Note: This introduces symbolic variables. Clear them before returning.
-    if R.parent() != SR:
-        sym_vari = [var(sym) for sym in [ str(x) for x in R.parent().gens()]]
-        R = SR(R)
-    
-    if R.numerator().is_constant() and R.denominator().is_constant():
+    if R_normalized.numerator().is_constant() and R_normalized.denominator().is_constant():
         if r == None or all(r[i] == 1 or r[i] == Integer(1) for i in range(d)):
-            return compute_period_annihilator(R, t, Dt)
+            return compute_period_annihilator(R_normalized, t, Dt)
         else:
             return compute_period_annihilator(SR(0), t, Dt)
+        
+    # Compute diagonal transformation.
+    G = diagonal_to_period(R_normalized,r,vari_normalized,t)
 
-    if r[0] > 1:
-        # Build root of unity filter / first-coordinate section of F over cyclotomic field over $\zeta$,
-        # where $\zeta$ is a primitive r1-th root of unity.
-        m = r[0]
-        Rsec = first_coordinate_section(R, vari[0], m, u=vari[0], vari=vari)
-        chvar = [vari[0] / prod(vari[i]**(m * r[i]) for i in range(1, d))] \
-                + [vari[i]**m for i in range(1, d)]
-        G = Rsec.subs({vari[i]: chvar[i] for i in range(d)}) / prod(vari[1:])
-    else:
-        # r[0] = 1 means we can use the usual change of variables formula for G, and sub into F directly.
-        chvar = [vari[0]/prod(vari[i]**(r[i]) for i in range(1,d))] + [vari[i] for i in range(1,d)]
-        G = R.subs({vari[i]: chvar[i] for i in range(d)})/prod(vari[1:]) 
-            
-    # Change the first variable of G to t. If t is provided and is in F, but is not the first variable, then we swap t and vari[0].
-    if t in vari and t != vari[0]:
-        G = G.subs({ vari[0] : t, t:vari[0]})
-    else:
-        G = G.subs({ vari[0] : t})
+    # Compute period operator and/or certificates
+    L = compute_period_annihilator(G, t, Dt)
+    # TODO: Add capability for returning certificate.
 
-    # Obtain an annihilating operator for the r-diagonal of R as a period annihilator of G
-    if R.parent() != SR:
-        for x in sym_vari:
-            reset(str(x))
-    return compute_period_annihilator(G, t, Dt)
+    # TODO: Add routine for verifying computed certificate.
+
+    # Clear symbolic variables that we created in normalize_diagonal_arguments.
+    for v in vari_normalized:
+        reset(str(v))
+
+    # TODO: Add possiblity of minimizing the diagonal operator using "guess and verify,"
+    # plus rigourous verification of the minimization.
+    L_min = minimize_diagonal_annihilator
+
+    return L
 
     
-def compute_period_annihilator(R, t, Dt):
+def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False, mindeg = None, ncpus = None):
     r"""
     Given a symbolic rational function $R(t,x_1,...,x_n)$, compute a D-finite equation 
     annihilating the period integrals (i.e., residues) of $R$ with respect to $x_1,...,x_n$.
@@ -187,12 +148,26 @@ def compute_period_annihilator(R, t, Dt):
     * ``R`` -- A rational function in $\mathbb{Q}(t)(x_1,...,x_n)$, either an element of ``SymbolicRing`` or the Fraction Field over a Multivariate Polynomial Ring in variables including $t$.
     * ``t`` -- A variable (either symbolic or a generator) appearing in `R` which names the output.
     * ``Dt`` -- A string used to name the operator for differentiation with respect to ``t``.
+    * ``reduction_order`` -- (Optional) The smallest order to start computing the modular Lairez reduction at. When ``None`` is passed in, a small order is selected
+     which is likely to give the best combination of small operator size and small runtime.
+    * ``certify`` -- (Optional) When ``True``,
+      the partial certificates from Section 7.3 of Lairez are computed and verified
+      for operator annihilating the diagonal, and the pair ``(operator, certificate)`` 
+      is returned. When combined with ``minimize=True``, the returned operator is 
+      certified relative to the pre-minimization operator.
+    * ``mindeg`` -- (Optional) Boolean flag enabling torus
+      change-of-variables preprocessing; see ``compute_period_annihilator``. Can
+      greatly speed up computation.
+    * ``ncpus`` -- (Optional) Parameter specifying number of CPU cores to use for
+      multiprocessing.
 
     OUTPUT:
 
     * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that 
     annihilates the residue of ``R`` with respect to $x_1,...,x_n$ or, if ``ore_algebra`` 
     is not available, an element of the ``OrePolynomialRing`` over ``QQ[t]`` with derivation symbol ``Dt``
+    * TODO: Add output and EXAMPLES for certificates and other parameters!
+
 
     EXAMPLES:
 
@@ -234,6 +209,11 @@ def compute_period_annihilator(R, t, Dt):
         In particular, ``OrePolynomial`` has no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It will instead return an error.
         This is one of several limitations of the ``OrePolynomialRing`` class, hence why we recommend ``OreAlgebra``.
 
+    !!! note
+
+        In the case where $R$ and $t$ are elements of a ``FractionField``, this function will create ``SymbolicRing`` variables corresponding to
+        the variables of $R$ and $t$. But these symbolic variables may be shadowed by their fraction field counterparts.
+
     """
     verbose(f"Computing operator annihilating residue of {R}", level=1)
     
@@ -244,45 +224,48 @@ def compute_period_annihilator(R, t, Dt):
         * Collect all algebraic irrational coefficients found in R and build a finite algebraic extension over QQ, 
         then use this to make K.
     '''
-    
-    # If we're passed in a non-SR R, verify assumptions on it, then put us into the symbolic ring.
-    # Laziness
+
+    # If we've passed in a non-SR R, verify assumptions on it, then put into SR.
     if R.parent() != SR:
-        assert t in R.parent().gens(), "t must be a generator of the parent of R."
-        sym_vari = [var(sym) for sym in [ str(x) for x in R.parent().gens() if x != t]]
-        t = var(str(t))
+        assert t in R.parent().gens(), "t must be a generator of the parent ring of R."
+        t = SR.var(t)
         R = SR(R)
+    else:
+        if R.parent() == SR:
+            assert t.parent() == SR, "If R is symbolic, then t must be a symbolic ring element as well."
+    vari = [v for v in R.variables() if v != t]
+    # # Normalize space variables -- just in case they're not from a diagonal.
+    # vari_normalized = list(SR.var("sage_periods_x", len(vari)))
+    # R_normalized = R.subs({old:new for (old,new) in zip(vari,vari_normalized)}) # This might not be necessary, here.
     
-    # Define base field and set up variables in Sage
-    F = QQ  
+    # Define base field and set up variables
+    F = QQ  # TODO: Add Possiblity of working over algebraically defined coefficients.
     K = PolynomialRing(F,t).fraction_field()
     t_symbolic = t
     t = K.gen()
-    vari = sorted((set(R.numerator().variables()) | set(R.denominator().variables())) - {t_symbolic},key=str)
 
     # Introduce homogenizing variable
-    extra_var = var('extra_var')
-    if extra_var in vari:
-        raise Exception("Please pick a different variable name. Can't use extra_var in input R, since it's reserved for homogenization.")
+    extra_var = SR.var('sage_periods_h')
     A = PolynomialRing(K,vari+[extra_var],len(vari)+1, order="degrevlex")
     B = A.fraction_field()
 
-    # Cast R into B; free symbolic variables, if we created them.
-    if R.parent() != SR:
-        reset(str(t_symbolic))
-        for x in sym_vari:
-            reset(str(x))
-        R = B(R)
-    else:
-        R = B(R)
+    # Cast R into B; free symbolic variables.
+    R = B(R)
+    # reset(str(t_symbolic))
+    # for x in vari_normalized:
+    #     reset(str(x))
     
     # Prepare our rational function
     Fhom = compute_homogenization(R)
     a,f,q = compute_prepared_fraction(Fhom)
     verbose(f"The prepared fraction has the form (a,f,q) = {(a,f,q)}",level=1)
 
+
+    # TODO: Run degree minimization on the denominator, if it is called
+
+
     # Build OreAlgebra object associated with this ring (if possible)
-    # First, "recast" A as the poly ring in t over F[x_0,...,x_n]
+    # First, recast A as the poly ring in t over F[x_0,...,x_n]
     _A_iso = PolynomialRing(F,t)
     _t_iso = _A_iso.gen()
     
@@ -298,10 +281,25 @@ def compute_period_annihilator(R, t, Dt):
 
     verbose("Starting to compute Picard-Fuchs operator using evaluation-interpolation.",level=1)
 
-    # Start with parameter r=1 and run a modular algorithm to compute L mod p. If no relations are found, r will be increased.
+    # Choose the reduction order.  If the user passed one, start there.
+    # If none was passed, probe r = 1 and r = 2 modulo one prime
+    # and start at whichever produces the operator of smaller order, 
+    # if both execution times are under 30 seconds.
+    # Else, pick whichever one is faster.
+    seed = {}
+    profile = {}
+    if reduction_order is None:
+        verbose("Choosing the reduction order by probing modulo one prime.",level=1)
+        # print(probe_reduction_order(a,f))
+        r, seed = probe_reduction_order(a, f) # Future: add , "ncpus=ncpus", passed in from caller. Also, probe_reduction_order should return "profile" as well.
+        verbose(f"Auto-probe selected reduction order r = {r}.",level=1)
+    else:
+        r = Integer(reduction_order)
+        assert r >= 1, "reduction_order must be a positive integer."
+
+    # Run a modular algorithm to compute L mod p. If no relations are found, r will be increased.
     # If the denominator of R defines a smooth variety, the algorithm is guaranteed to terminate with r=1. In general the algorithm
     # will terminate, but the smallest value of r guaranteed to make it stop is still an open problem.
-    r = 1
     deq = None
     while not deq:
         verbose("    r: " + str(r),level=1)
@@ -412,296 +410,3 @@ def compute_period_annihilator(R, t, Dt):
                 print(str(e))
                 raise
     return deq
-    
-
-def compute_homogenization(R, k=None, t = None, homog_var = None):
-    r"""
-    Return the homogenization of a rational function.
-
-    INPUT:
-
-    * ``R`` -- An element of the SymbolicRing or an element of $F(t)(x_1,...,x_n)$ where
-        $F$ is an algebraic extension of $\mathbb{Q}$.
-    * ``k`` -- (Optional) An integer specifying the degree in which to homogenize ``R``. If not
-        provided, ``k`` is taken to be $-n-1$, where $n$ is the
-        number of variables appearing in ``R`` other than the parameter ``t``.
-    * ``t`` -- (Optional) An element of the ``SymbolicRing`` defining the parameter when ``R`` is symbolic.
-    * ``homog_var`` -- (Optional) If provided, this is the variable used to homogenize.
-        If ``R`` is symbolic, this variable should not appear in ``R``. Unused if ``R`` is an element of $F(t)(x_1,...,x_n)$,
-        where homogenization occurs with respect to the last generator of the ring.
-
-    ASSUMPTIONS:
-
-    * ``t`` is not ``homog_var`` if ``R`` is symbolic.
-    * Homogenizing variable is the *last* variable to appear in ``R.parent().gens()`` if ``R`` is not symbolic. 
-
-    OUTPUT:
-
-    * The homogenization of ``R(t)`` in degree ``k`` with homogenizing variable ``homog_var``.
-      Concretely, if $R = R(x_1, ..., x_n, t)$ and ``homog_var = h``, then the result is 
-      $h^k R(x_1/h, ..., x_n/h)$. If ``R`` is symbolic, then so is the output.
-
-    EXAMPLES:
-
-    If the input *is* symbolic, you must pass in the parameter and homogenization variable.
-
-            sage: var('t x y')
-            sage: F = 1/(1-t*x*y + y**2)
-            sage: compute_homogenization(F)
-            Traceback (most recent call last):
-            ...
-            AssertionError: You must provide t and homog_var if R is in the Symbolic Ring.
-
-    By default, the homogenization has degree $-n-1$
-
-            sage: var('h')
-            sage: compute_homogenization(F,t=t,homog_var=h)
-            -1/(h^3*(t*x*y/h^2 - y^2/h^2 - 1))
-
-    but you can change this by passing a value for ``k``.
-
-            sage: compute_homogenization(F,k=5,t=t,homog_var=h)
-            -h^5/(t*x*y/h^2 - y^2/h^2 - 1)
-            sage: compute_homogenization(F,k=-5,t=t,homog_var=h)
-            -1/(h^5*(t*x*y/h^2 - y^2/h^2 - 1))
-            
-    You can also pass in an element of $\mathbb{Q}(t)(x_0,...,x_n)$. Here, the parameter is extracted as the 
-    generator of the base ring and the homogenization variable is $x_n$.
-
-            sage: K = QQ[t].fraction_field()
-            sage: A = K[x,y,h].fraction_field()
-            sage: t = K.gen()
-            sage: x = A.gens()[0]
-            sage: y = A.gens()[1]
-            sage: F_frac = 1/(1-t*x*y + y**2)
-            sage: compute_homogenization(F_frac)
-            1/((-t)*x*y*h + y^2*h + h^3)
-
-    In the non-symbolic case you should not pass in values for ``t`` or ``homog_var``.
-
-            sage: compute_homogenization(F_frac,t=t,homog_var = A.gens()[2])
-            Traceback (most recent call last):
-            ...
-            AssertionError: If R is a member of a fraction field, put the homogenizing variable as last generator of R's parent ring.
-
-    """
-    assert R.parent() != SR or (t != None and homog_var != None), "You must provide t and homog_var if R is in the Symbolic Ring."
-    assert R.parent() == SR or (t == None and homog_var == None), "Only provide t and homog_var if R is in the Symbolic Ring."
-    assert not(R.parent() != SR and homog_var != None), "If R is a member of a fraction field, put the homogenizing variable as last generator of R's parent ring."
-    assert not(R.parent() == SR and homog_var in R.variables()), "If R is symbolic, then homogenizing variable can't be apart of R already."
-    if R.parent() == SR:
-        h = homog_var
-        vari = [v for v in R.variables() if v != h if v!= t]
-
-    else:
-        B = R.parent()
-        h = B.gens()[-1]
-        h_poly = B.ring().gens()[-1]
-        assert R.numerator().degree(h_poly) <= 0 and R.denominator().degree(h_poly) == 0, "Not allowed to have homogenization variable inside your function already."
-        vari = [v for v in B.gens() if v != h]
-    if( k == None):
-        k = -len(vari)-1
-    return h**k*R.subs({ x : x/h for x in vari})
-
-
-def compute_prepared_fraction(R,t = None):
-    r"""
-    Given a rational function $R$, either symbolic or in $F(t)(x_0,...,x_n)$ 
-    with $F$ a finite algebraic extension of $\mathbb{Q}$, return polynomials $a$ 
-    and $f$ and integer $q$ such that $R = a/f^q$. 
-
-    Note that $f$ and $a$ may not be coprime, but $f$ is squarefree.
-
-    INPUT:
-
-    * ``R`` -- An element of the symbolic ring or $F(t)(x_0,...,x_n)$ with $F$ 
-        a finite algebraic extension of $\mathbb{Q}$.
-    *   ``t`` -- (Optional) A symbolic variable which is the parameter of ``R``, when ``R`` is symbolic.
-
-    OUTPUT:
-
-    * A triple ``(a, f, q)`` such that ``R = a/f^q`` and ``f`` is
-      squarefree. If ``R`` is homogeneous then both ``a`` and ``f``
-      are homogeneous polynomials. If R is symbolic, then so are ``a`` and ``f``.
-
-    EXAMPLES:
-
-    If the input is symbolic, you must pass in the parameter ``t``.
-
-            sage: var('t x y')
-            sage: F = 1/(1-t*x*y + y**2)
-            sage: compute_prepared_fraction(F)
-            Traceback (most recent call last):
-            ...
-            AssertionError: If R is symbolic, please provide the parameter t.
-
-            sage: compute_prepared_fraction(F,t)
-            (-1, t*x*y - y^2 - 1, 1)
-
-    Like ``compute_homogenization``, the user is allowed to pass in an element
-    of a fraction field.
-
-            sage: var('h')
-            sage: K = QQ[t].fraction_field()
-            sage: A = K[x,y,h].fraction_field()
-            sage: t = K.gen()
-            sage: x = A.gens()[0]
-            sage: y = A.gens()[1]
-            sage: F_frac = 1/(1-t*x*y + y**2)
-            sage: compute_prepared_fraction(F_frac)
-            (-1, t*x*y - y^2 - 1, 1)
-
-    """
-    if R.parent() == SR:
-        is_symbolic = True
-    else:
-        is_symbolic = False
-    
-    assert not (not is_symbolic and t != None), "Only provide t if R is in the Symbolic Ring."
-    assert (not is_symbolic or t != None), "If R is symbolic, please provide the parameter t."
-    if is_symbolic:
-        # Need to build the fraction ring and evaluate R
-        F = QQ 
-        K = PolynomialRing(F,t).fraction_field()
-        t_symbolic = t
-        t = K.gen()
-        vari = sorted((set(R.numerator().variables()) | set(R.denominator().variables())) - {t_symbolic},key=str)
-        A = PolynomialRing(K,vari,len(vari), order="degrevlex")
-        B = A.fraction_field()
-        R = B(R)
-    else:
-        B = R.parent()
-        A = B.ring()
-
-    # Corner case: Constant R. Need this so max() doesn't throw an error.
-    if R.numerator().degree() <= 0 and R.denominator().degree() == 0:
-        a = A(R)
-        f = A(1)
-        q = 1
-        if is_symbolic:
-            return SR(a), SR(f), q
-        else:
-            return a,f,q
-
-    vari = B.gens()
-    g = R.numerator()
-    h = R.denominator()
-
-    # Make f squarefree
-    h_factors = h.factor()
-    pairs = list(h_factors)
-    unit = h_factors.unit()
-    
-    q = max(e for _, e in pairs)
-    f = prod(p for p, _ in pairs)
-    a = f**q * R 
-    if is_symbolic:
-        return SR(a), SR(f), q
-    else:
-        return A(a),A(f),q
-
-
-def compute_gauss_manin_connection(a,f,r,p):
-    r"""
-    Compute the Gauss-Manin matrix $B$ for the map defined by closing $\rho_0$ under the map $\rho \mapsto [f^\delta \rho]_r$,
-    as described in Section 7.2 of Lairez 2016. Also returns the basis for the space and the projection of $a$ into this space.
-
-    This function is typically called as a subroutine of ``compute_period_annihilator``.
-
-    INPUT:
-
-    * ``a`` -- A polynomial representing the numerator of the function under consideration.
-    * ``f`` -- A square-free polynomial representing the square-free denominator of the function under consideration.
-    * ``r`` -- Order of the reduction $[\cdot]_r$ which we compute.
-    * ``p`` -- The characteristic of the field which we evaluate ``a`` and ``f`` into to do our reductions.
-    
-    OUTPUT: 
-    
-    * $M$, $\rho_0(t)$ and $B(t)$ as described in Section 7.2 of Lairez 2016.
-
-    """
-    A = a.parent()
-    t = A.base_ring().gen()
-    bad_points = []
-
-    # Build the K = GF(p)(t) we'll need for reconstruction
-    K = PolynomialRing(GF(p),t).fraction_field()
-    F = K.base_ring() # GF(p)
-    AF = A.change_ring(F) # This should equal RK.A across all RK
-
-    # Reconstruction object for B and rho0
-    H = ReconstructionData()
-
-    # Counter for seeing if we must increase r, or if we just had bad evaluation point
-    rtoosmall = 0
-    # Counter for seeing how many points we've evaluated; useful for breaking out if we suspect a bad prime
-    uctr = 0
-    gauss_manin_helper_times = []
-
-    # Main loop
-    while True:
-        u = ZZ.random_element(1, p)   # random evaluation point
-        u_QQ = QQ(u)                  # for substitution into coefficients over QQ(t)
-        u_K  = K(u)                   # for interpolation / storage mod p
-        if u in H.points or u in bad_points:
-            continue
-        verbose("        u: "+str(u),level=1)
-
-        # Heuristically decide if we've encountered a prime that causes a
-        # degenerate specialization. If we end up running a TON of points
-        # for an example, then we label this prime as bad and break out.
-        uctr += 1
-
-        # Try evaluating f, a, f^delta into our ring. If this fails, pick a new point.
-        fdict = f.dict()
-        fdelta = A({ key: fdict[key].derivative() for key in fdict.keys()}) #f^delta
-        
-        try:
-            feval = AF(SR(f).subs({t:u_QQ}))
-            fdeltaeval = AF(SR(fdelta).subs({t:u_QQ}))
-            aeval = AF(SR(a).subs({t:u_QQ}))
-        except:
-            verbose("Evaluations of f, a, or f^delta failed. Pick a different point.",level=1)
-            bad_points.append(u)
-            continue
-            
-        # Build our RhamKoszulData object with evaluated f
-        U = RhamKoszulData(feval,r=r)
-        
-        # Run gauss_manin_helper on <fteval,[aeval]>, with our prime and r
-        try:
-            ret = gauss_manin_helper(U, fdeltaeval, [aeval], None)
-        except RuntimeError as e:
-            if str(e) == "INCREASE_R":
-                rtoosmall += 1
-                bad_points.append(u)
-                if rtoosmall >= 3:
-                    raise RuntimeError("INCREASE_R")
-                continue
-            else:
-                print("Error in compute_gauss_manin_connection: ")
-                print(str(e))
-                raise
-
-        # Extract results and add to interpolation routine. Proj is the |M| x 1 matrix expressing rho_0' in terms of M
-        basis_key = ret.ebasis #gauss_manin_helper should return a tuple of tuples of tuples
-        rho0_eval = ret.proj
-        B_prime = ret.gm
-        basis = ret.basis
-
-        # Feed to interpolation manager
-        recon_add_rat(H,(rho0_eval,B_prime),u_K,basis_key) # Both rho0 and B are matrices
-
-        # Stability is handled by recon_add_rat, we just need to check if candidate has been assigned
-        if H.candidate is not None:
-            return H.candidate[0], basis, H.candidate[1] # rho0, M, B
-        # Else, continue.
-
-
-# __all__ = [
-#     "compute_homogenization",
-#     "compute_prepared_fraction",
-#     "compute_period_annihilator",
-#     "compute_diagonal_annihilator",
-#     "compute_gauss_manin_connection"
-# ]
