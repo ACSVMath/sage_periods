@@ -382,15 +382,30 @@ def exterior_derivative(U, a):
             3*u^2      
 
     """
-
-    c = [a.coefficient({U.v:i}) for i in range(a.degree(U.v)+1)]
-    if len(c) > 0:
-        sh = U.vshift
-        return c[0] + sum(
-            c[i].derivative(parent(c[i]).gen(i - 1 + sh)) * U.u ** i
-            for i in range(1, len(c))
-        )
-    return U.xring.zero()
+    # Single pass over the terms of ``a``: a term c * u^p * v^i * x^E with
+    # i >= 1 contributes c * E_{i-1} * u^{p+i} * x^{E - e_{i-1}} (the partial
+    # derivative of its v^i-coefficient with respect to x_{i-1}, times u^i),
+    # and v-free terms pass through unchanged.  This is the same map as Pierre's
+    # formula but avoids scanning over ``a`` once for every ``v``-degree.
+    sh = U.vshift
+    out = {}
+    for e, c in a.dict().items():
+        i = e[1]
+        if i == 0:
+            enew = tuple(e)
+            out[enew] = out.get(enew, 0) + c
+        else:
+            xidx = i - 1 + sh
+            k = e[xidx]
+            if k == 0:
+                continue
+            enew = list(e)
+            enew[1] = 0
+            enew[0] = e[0] + i
+            enew[xidx] = k - 1
+            enew = tuple(enew)
+            out[enew] = out.get(enew, 0) + c * k
+    return U.xring({e: c for e, c in out.items() if c})
 
 
 def elementary_reduction_step(U, L0):
