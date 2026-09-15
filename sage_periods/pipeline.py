@@ -155,45 +155,117 @@ def compute_reductions_dependency(rho0,B):
             [0, 1]
 
     """
+    # K = B[0,0].parent() # K is F_p(t)
+    # t = K.gen() # This is the generator for GF(p)(t)
+
+    # m=0
+    # # All our rho[i]'s should be represented by vectors with respect to M
+    # # Since rho0 is a matrix, this is easy
+    # rho = [vector(rho0.list())]
+    # while True:
+    #     verbose("        m: "+str(m),level=1)
+    #     verbose("rho: ",level=1)
+    #     verbose(rho,level=1)
+    #     # Note that our degree is guaranteed to stay bounded (i.e. r need not increase)
+    #     # because the M we found in Stage 1 is canonical, as are rho0 and B.
+    #     rhomat = Matrix(rho).transpose()
+        
+    #     if rhomat.rank() == m + 1:
+    #         rho.append(vector([ fn.derivative(t)for fn in rho[m]]) + B*rho[m])
+    #     else:
+    #         # Need to solve the system over K to find coefficients for 
+    #         # which the linear comb of the lower rho_k = rho_m
+    #         try:
+    #             y = rhomat[:,:m].solve_right(rho[m])
+    #         except:
+    #             print("            OH NO! We couldn't find a dependency!")
+            
+    #         # At this point, we have our coefficient vector. We could return, but we should clear denominators first to make CRT possible.
+
+    #         # Extract denominators of y coefficients
+    #         denoms = [ai.denominator() for ai in y]
+    #         Rp = K.ring() # Rp = GF(p)[t] and each entry in denoms is already in Rp
+    #         # Take LCM of denoms
+    #         LCM = lcm(denoms) if denoms else Rp(1) # If our denoms list is empty then our LCM is 1
+    #         out = [LCM*y[i] for i in range(m)] + [LCM] # This could have entries in K or Rp
+    #         try:
+    #             out = [Rp(c) for c in out]
+    #         except Exception:
+    #             raise Exception("BAD_PRIME")
+    #         return out
+    #     m += 1
     K = B[0,0].parent() # K is F_p(t)
-    t = K.gen() # This is the generator for GF(p)(t)
+    t = K.gen() # Generator for GF(p)(t)
+    F = K.base_ring() # GF(p)
 
     m=0
     # All our rho[i]'s should be represented by vectors with respect to M
     # Since rho0 is a matrix, this is easy
     rho = [vector(rho0.list())]
+
+    # Cheap rank filter: the rank of the Krylov matrix specialized at a random
+    # point t = u0 is at most its rank over GF(p)(t).  So while the specialized
+    # matrix has full rank, the exact matrix provably has full rank as well and
+    # no linear algebra over GF(p)(t) is needed.  Only when the specialized
+    # rank drops do we attempt an exact solve; if that solve has no solution,
+    # the drop was an artifact of the evaluation point and we redraw it.
+
+    # !! NOTE: Below method has no termination guarantee! Over a finite field, 
+    # nonzero polynomials can vanish at every field element -- e.g. t^p-t. 
+    # This is unrealistic for us, given our large prime size and small degrees,
+    # but is theoretically possible.
+    def _draw_point_and_evaluate():
+        while True:
+            u0 = F.random_element()
+            try:
+                return u0, [[c(u0) for c in v] for v in rho]
+            except (ZeroDivisionError, ArithmeticError):
+                # u0 is a pole of some entry; try another point.
+                continue
+
+    u0, rho_ev = _draw_point_and_evaluate()
     while True:
         verbose("        m: "+str(m),level=1)
-        verbose("rho: ",level=1)
-        verbose(rho,level=1)
         # Note that our degree is guaranteed to stay bounded (i.e. r need not increase)
         # because the M we found in Stage 1 is canonical, as are rho0 and B.
-        rhomat = Matrix(rho).transpose()
-        
-        if rhomat.rank() == m + 1:
-            rho.append(vector([ fn.derivative(t)for fn in rho[m]]) + B*rho[m])
+        y = None
+        independent = False
+        if Matrix(F, rho_ev).rank() == m + 1:
+            independent = True
         else:
-            # Need to solve the system over K to find coefficients for 
-            # which the linear comb of the lower rho_k = rho_m
+            # Possible dependency; decide exactly over GF(p)(t) by solving for
+            # coefficients expressing rho_m in terms of the lower rho_k.
+            rhomat = Matrix(rho).transpose()
             try:
                 y = rhomat[:,:m].solve_right(rho[m])
-            except:
-                print("            OH NO! We couldn't find a dependency!")
-            
-            # At this point, we have our coefficient vector. We could return, but we should clear denominators first to make CRT possible.
+            except ValueError:
+                # Spurious rank drop at u0: rho[m] is independent after all.
+                independent = True
+                u0, rho_ev = _draw_point_and_evaluate()
 
-            # Extract denominators of y coefficients
-            denoms = [ai.denominator() for ai in y]
-            Rp = K.ring() # Rp = GF(p)[t] and each entry in denoms is already in Rp
-            # Take LCM of denoms
-            LCM = lcm(denoms) if denoms else Rp(1) # If our denoms list is empty then our LCM is 1
-            out = [LCM*y[i] for i in range(m)] + [LCM] # This could have entries in K or Rp
+        if independent:
+            rho.append(vector([ fn.derivative(t)for fn in rho[m]]) + B*rho[m])
             try:
-                out = [Rp(c) for c in out]
-            except Exception:
-                raise Exception("BAD_PRIME")
-            return out
-        m += 1
+                rho_ev.append([c(u0) for c in rho[m+1]])
+            except (ZeroDivisionError, ArithmeticError):
+                # u0 is a pole of the new iterate: redraw the filter point.
+                u0, rho_ev = _draw_point_and_evaluate()
+            m += 1
+            continue
+
+        # At this point, we have our coefficient vector. We could return, but we should clear denominators first to make CRT possible.
+
+        # Extract denominators of y coefficients
+        denoms = [ai.denominator() for ai in y]
+        Rp = K.ring() # Rp = GF(p)[t] and each entry in denoms is already in Rp
+        # Take LCM of denoms
+        LCM = lcm(denoms) if denoms else Rp(1) # If our denoms list is empty then our LCM is 1
+        out = [LCM*y[i] for i in range(m)] + [LCM] # This could have entries in K or Rp
+        try:
+            out = [Rp(c) for c in out]
+        except Exception:
+            raise Exception("BAD_PRIME")
+        return out
 
 
 # Stage 3
