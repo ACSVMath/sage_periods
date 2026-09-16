@@ -254,12 +254,12 @@ def minimize_denominator_degree(R, xgens, rounds=3, concurrent=10, time_cap=30.0
             pool = cand[:concurrent]
     if cur >= start:
         return R
-    verbose(f"mindeg: denominator degree reduced from {start} to {cur}.", level=1)
+    verbose(f"minimize_denom_deg: denominator degree reduced from {start} to {cur}.", level=1)
     return pool[0] / prodx
 
 # NOTE: This function assumes that, generically, a call with r=1 will be faster than a call with r=2.
 # We should see how reasonable this assumption is.
-def probe_reduction_order(a, f): # Future: add flag ncpus=None for delegation in Stage 1.
+def probe_reduction_order(a, f,ensure_termination): # Future: add flag ncpus=None for delegation in Stage 1.
     r"""
     Probe r=2 for at most 30 seconds, followed by r=1 if r=2
     completes. Return ``(reduction_order, seed, profile)``.
@@ -272,7 +272,7 @@ def probe_reduction_order(a, f): # Future: add flag ncpus=None for delegation in
         # being terminated while it owns a nested multiprocessing pool.
         pending = pool.apply_async(
             _probe_reduction_order_once,
-            (a, f, 2,None), # Future: add " , 1" as arguments
+            (a, f, 2,ensure_termination,None), # Future: add " , 1" as arguments
         )
 
         result_r2 = pending.get(timeout=30.0)
@@ -296,6 +296,7 @@ def probe_reduction_order(a, f): # Future: add flag ncpus=None for delegation in
         a,
         f,
         1,
+        ensure_termination = ensure_termination,
         first_prime=(
             result_r2["prime"]
             if result_r2 is not None
@@ -323,7 +324,7 @@ def probe_reduction_order(a, f): # Future: add flag ncpus=None for delegation in
 
     return choice["r"], seed # Future: add choice["profile"]
 
-def _probe_reduction_order_once(a,f,r,first_prime=None): # Future-proofing: add flag for ncpus!
+def _probe_reduction_order_once(a,f,r,ensure_termination,first_prime=None): # Future-proofing: add flag for ncpus!
     r"""Compute one modular probe and its comparison score."""
     # profile = {} # For future reference
     p = first_prime
@@ -340,7 +341,7 @@ def _probe_reduction_order_once(a,f,r,first_prime=None): # Future-proofing: add 
                 coeffs = None
                 score = (0, -1, 0, len(M), r)
             else:
-                coeffs = compute_reductions_dependency(rho0, B)
+                coeffs = compute_reductions_dependency(rho0, B,ensure_termination)
                 degrees = [
                     -1 if c == 0 else int(c.degree())
                     for c in coeffs

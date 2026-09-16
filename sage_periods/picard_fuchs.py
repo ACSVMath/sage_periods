@@ -22,7 +22,7 @@ else:
 from sage.misc.verbose import verbose, set_verbose
 
 
-def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, reduction_order = None, minimize = False, certify = False, mindeg = None, ncpus = None):
+def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, reduction_order = None, minimize = False, certify = False, minimize_denom_deg = None, ncpus = None, ensure_termination = False):
     r"""
     Given a symbolic rational function $R(x_1,...,x_d)$, compute a D-finite equation annihilating the $r$-diagonal of $R$.
 
@@ -46,11 +46,13 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
       for operator annihilating the diagonal, and the pair ``(operator, certificate)`` 
       is returned. When combined with ``minimize=True``, the returned operator is 
       certified relative to the pre-minimization operator.
-    * ``mindeg`` -- (Optional) Boolean flag enabling torus
+    * ``minimize_denom_deg`` -- (Optional) Boolean flag enabling torus
       change-of-variables preprocessing; see ``compute_period_annihilator``. Can
       greatly speed up computation.
     * ``ncpus`` -- (Optional) Parameter specifying number of CPU cores to use for
       multiprocessing.
+    * ``ensure_termination`` -- (Optional) Some speedups (e.g. rank specialization in Stage 2) lack termination guarantees,
+      but failure is extremely unlikely. Setting to ``True`` forces execution to fall back to slower methods with guaranteed termination.
 
     OUTPUT:
 
@@ -122,7 +124,7 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
     G = diagonal_to_period(R_normalized,r,vari_normalized,t)
 
     # Compute period operator and/or certificates
-    L = compute_period_annihilator(G, t, Dt)
+    L = compute_period_annihilator(G, t, Dt,ensure_termination=ensure_termination)
     # TODO: Add capability for returning certificate.
 
     # TODO: Add routine for verifying computed certificate.
@@ -138,7 +140,7 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
     return L
 
     
-def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False, mindeg = None, ncpus = None):
+def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False, minimize_denom_deg = None, ncpus = None,ensure_termination=False):
     r"""
     Given a symbolic rational function $R(t,x_1,...,x_n)$, compute a D-finite equation 
     annihilating the period integrals (i.e., residues) of $R$ with respect to $x_1,...,x_n$.
@@ -155,11 +157,13 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
       for operator annihilating the diagonal, and the pair ``(operator, certificate)`` 
       is returned. When combined with ``minimize=True``, the returned operator is 
       certified relative to the pre-minimization operator.
-    * ``mindeg`` -- (Optional) Boolean flag enabling torus
+    * ``minimize_denom_deg`` -- (Optional) Boolean flag enabling torus
       change-of-variables preprocessing; see ``compute_period_annihilator``. Can
       greatly speed up computation.
     * ``ncpus`` -- (Optional) Parameter specifying number of CPU cores to use for
       multiprocessing.
+    * ``ensure_termination`` -- (Optional) Some speedups (e.g. rank specialization in Stage 2) lack termination guarantees,
+      but failure is extremely unlikely. Setting to ``True`` forces execution to fall back to slower methods with guaranteed termination.
 
     OUTPUT:
 
@@ -291,7 +295,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     if reduction_order is None:
         verbose("Choosing the reduction order by probing modulo one prime.",level=1)
         # print(probe_reduction_order(a,f))
-        r, seed = probe_reduction_order(a, f) # Future: add , "ncpus=ncpus", passed in from caller. Also, probe_reduction_order should return "profile" as well.
+        r, seed = probe_reduction_order(a, f,ensure_termination) # Future: add , "ncpus=ncpus", passed in from caller. Also, probe_reduction_order should return "profile" as well.
         verbose(f"Auto-probe selected reduction order r = {r}.",level=1)
     else:
         r = Integer(reduction_order)
@@ -359,7 +363,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 ###############################################################################################
                 verbose("Computing linear relation... ",level=1)
                 try:
-                    Lp_coeffs_denoms_cleared = compute_reductions_dependency(rho0,B)
+                    Lp_coeffs_denoms_cleared = compute_reductions_dependency(rho0,B,ensure_termination=ensure_termination)
                 except Exception as e:
                     if str(e) == "BAD_PRIME":
                         # This means we couldn't clear denoms successfully in Stage 2. Discard this prime and continue
