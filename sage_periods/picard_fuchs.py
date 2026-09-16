@@ -11,6 +11,7 @@ from sage.all import *
 from .diagonal import minimize_diagonal_annihilator, diagonal_to_period, normalize_diagonal_arguments
 from .preparation import compute_homogenization, compute_prepared_fraction, minimize_denominator_degree, probe_reduction_order
 from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, lift_operator_across_primes
+from .errors import SagePeriodsError, ReductionOrderTooSmallError, BadPrimeError, NeedMorePrimesError, ProbeBasisCapExceededError
 
 # Check if ore_algebra is available, and import it if so
 from . import _is_ore_algebra_installed
@@ -344,13 +345,9 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 #######################################################################################
                 try:
                     rho0, M, B = compute_gauss_manin_connection(a,f,r,p)
-                except Exception as e:
-                    if str(e) == "INCREASE_R":
-                        raise Exception("INCREASE_R")
-                    else:
-                        print("Error in Stage 1 (Computing M, rho_0 and B): ")
-                        print(str(e))
-                        raise
+                except ReductionOrderTooSmallError as e:
+                    # Increase r (we're inside a try already)
+                    raise e
                 
                 # If we get a trivial basis, then we're done.
                 if len(M) == 0 or rho0.nrows() == 0:
@@ -364,16 +361,9 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 verbose("Computing linear relation... ",level=1)
                 try:
                     Lp_coeffs_denoms_cleared = compute_reductions_dependency(rho0,B,ensure_termination=ensure_termination)
-                except Exception as e:
-                    if str(e) == "BAD_PRIME":
-                        # This means we couldn't clear denoms successfully in Stage 2. Discard this prime and continue
-                        bad_primes.append(p)
-                        print("Encountered bad prime in Stage 2. p = "+str(p))
-                        continue
-                    else:
-                        print("Error in Stage 2 (Computing a dependency among the rho[i]): ")
-                        print(str(e))
-                        raise
+                except BadPrimeError:
+                    bad_primes.append(p)
+                    continue
                 
                 Lp_coeffs_dict[p] = Lp_coeffs_denoms_cleared
                 
@@ -386,7 +376,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 verbose(f"Found an equation of order {len(Lp_coeffs_denoms_cleared)-1} and degree {max([p.numerator().degree() for p in Lp_coeffs_denoms_cleared])}.",level=1)
                 try:
                     L_coeffs = lift_operator_across_primes(t,Lp_coeffs_dict,bad_primes)
-                except Exception:
+                except NeedMorePrimesError:
                     # Either we pruned out too many primes in CRT, or we don't have enough to rationally reconstruct. Add more.
                     verbose("Rational reconstruction failed to lift one or more of our coefficients. Need more primes.",level=1)
                     continue
@@ -404,13 +394,8 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             # Build operator then return it.
             m = len(L_coeffs)
             deq = Alg(L_coeffs[m-1]*Dt**(m-1) - sum([L_coeffs[k]*(Dt**k) for k in range(m-1)]))
-        except Exception as e:
-            # If our r is too low
-            if str(e) == "INCREASE_R":
-                r += 1
-                continue
-            else:
-                print("Error in main r-loop:")
-                print(str(e))
-                raise
+        except ReductionOrderTooSmallError as e:
+            r += 1
+            continue
+
     return deq

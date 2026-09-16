@@ -3,6 +3,7 @@ r"""Main stages in our modular pipeline for the reduction algorithm"""
 from sage.all import *
 from .reconstruction import ReconstructionData, recon_add_rat
 from .rham_koszul import RhamKoszulData, gauss_manin_helper
+from .errors import *
 
 from collections import Counter # For Stage 3
 
@@ -86,17 +87,12 @@ def compute_gauss_manin_connection(a,f,r,p):
         # Run gauss_manin_helper on <fteval,[aeval]>, with our prime and r
         try:
             ret = gauss_manin_helper(U, fdeltaeval, [aeval], None)
-        except RuntimeError as e:
-            if str(e) == "INCREASE_R":
-                rtoosmall += 1
-                bad_points.append(u)
-                if rtoosmall >= 3:
-                    raise RuntimeError("INCREASE_R")
+        except ReductionOrderTooSmallError:
+            rtoosmall += 1
+            bad_points.append(u)
+            if rtoosmall >= 3:
+                raise RuntimeError("INCREASE_R")
                 continue
-            else:
-                print("Error in compute_gauss_manin_connection: ")
-                print(str(e))
-                raise
 
         # Extract results and add to interpolation routine. Proj is the |M| x 1 matrix expressing rho_0' in terms of M
         basis_key = ret.ebasis #gauss_manin_helper should return a tuple of tuples of tuples
@@ -230,7 +226,7 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
         try:
             out = [Rp(c) for c in out]
         except Exception:
-            raise Exception("BAD_PRIME")
+            raise BadPrimeError("Last line of compute_reductions_dependency", prime=F.characteristic(),stage="dependency")
         return out
 
 
@@ -346,7 +342,7 @@ def lift_operator_across_primes(t, Lp_coeffs_dict, bad_primes):
     # Handle trivial case
     if not Lp_coeffs_dict:
         verbose("        Lp_coeffs_dict is empty. Need more primes...",level=1)
-        raise Exception("Lp_coeffs_dict is empty. Need more primes...")
+        raise NeedMorePrimesError("Lp_coeffs_dict is empty. Need more primes...")
 
     #### Pre-CRT pruning: normalization + consistency checks ####
     # We use heuristics to make sure that our operators are all the same "shape," i.e. non-degenerate.
@@ -405,7 +401,7 @@ def lift_operator_across_primes(t, Lp_coeffs_dict, bad_primes):
 
     if not Lp_coeffs_dict:
         verbose("        No good primes left after pruning. Need more primes...",level=1)
-        raise Exception("No good primes left after pruning. Need more primes...")
+        raise NeedMorePrimesError("No good primes left after pruning. Need more primes...")
 
     verbose("        Pruned bad primes. Performing CRT + reconstruction...",level=1)
     verbose("        FINAL Lp_coeffs_dict after pruning, canonical entries: ",level=1)
@@ -451,7 +447,7 @@ def lift_operator_across_primes(t, Lp_coeffs_dict, bad_primes):
                 coeffs_i.append(QQ(q))
             except (ValueError, ArithmeticError):
                 verbose("        Rational reconstruction failed for some coefficient. Need more primes...",level=1)
-                raise Exception(
+                raise NeedMorePrimesError(
                     "Rational reconstruction failed for some coefficient. Need more primes..."
                 )
 

@@ -3,6 +3,7 @@ r"""Functions used in preparing rational period intetgral for modular pipeline."
 from sage.all import *
 
 from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency
+from .errors import *
 
 from sage.misc.verbose import verbose
 import multiprocessing
@@ -312,7 +313,7 @@ def probe_reduction_order(a, f,ensure_termination): # Future: add flag ncpus=Non
 
     if not usable:
         # Both r=1 and r=2 were bad; start main loop at r=3.
-        return 3, {}, {}
+        return 3, {} # Future: add another empty dict here, for the profile.
 
     choice = min(usable, key=lambda result: result["score"])
 
@@ -365,13 +366,12 @@ def _probe_reduction_order_once(a,f,r,ensure_termination,first_prime=None): # Fu
             return {"r": r,"prime": p,"coeffs": coeffs, "score": score} # Future: also return "profile": profile,
 
         except Exception as exc:
-            reason = str(exc)
 
-            if reason == "BAD_PRIME" and attempt < 4:
+            if isinstance(exc,BadPrimeError) and attempt < 4:
                 p = None
                 continue
 
-            if reason in ("INCREASE_R", "BASIS_CAP"):
+            if isinstance(exc,ReductionOrderTooSmallError) or isinstance(exc,ProbeBasisCapExceededError):
                 verbose(
                     f"    Probe at reduction order {r} was unusable: "
                     f"{reason}.",

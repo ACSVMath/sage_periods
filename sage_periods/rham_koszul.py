@@ -12,6 +12,7 @@ from sage.structure.element import parent
 
 
 from .poly_lin_alg import echelonized_basis_poly, linear_normal_form_p
+from .errors import ReductionOrderTooSmallError
 
 # For RhamKoszulData object.
 from dataclasses import dataclass, field 
@@ -779,7 +780,7 @@ def gauss_manin_helper(U, der, L, ret=None):
         # If the reduced images exceed the expected degree bound, then r was too
         # small for the higher reduction to have stabilised.
         if max(p.degree() for p in gm) > (U.dim - 1) * U.deg:
-            raise RuntimeError("INCREASE_R")
+            raise ReductionOrderTooSmallError("Degree condition met! Raise r",U.r)
 
         # Continue with the newly discovered monomials, exactly as in the monomial
         # closure construction of M in Algorithm 4 of Lairez 2016.
