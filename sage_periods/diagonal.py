@@ -1,6 +1,8 @@
 r"""Utilities for working with diagonals."""
 
 from sage.all import *
+from ore_algebra import OreAlgebra as _OreAlgebra
+from ore_algebra import guess as _guess
 
 def normalize_diagonal_arguments(R, r = None, vari = None, Dt = None, t = None):
     r"""
@@ -99,19 +101,125 @@ def diagonal_to_period(R, r, vari , t):
 
     return G
 
-def minimize_diagonal_annihilator(L, R, r, t):
-    r"""
-        TODO: write this function which will:
-        - Compute initial terms in the diagonal of R = P/Q by series expansion.
-        - "Guess" recurrence operator based on these initial terms.
-        - Verify that this operator is correct, and is the minimal annihilator of the period.
-    """
-    pass
 
-# Can get from AI version picard_fuchs.py, iyw.
-def diagonal_series_terms(P, Q, rdir, N):
+# TODO: Further improvement directions:
+# - Make pull-request for implementing recursive doubling on the _to_list() method, to allow multiprocessing.
+# - OR, write a method which does this yourself! :)
+# - Convert to Cython + statically type?
+def minimize_diagonal_annihilator(L, P, Q, r, t):
     r"""
-    Return the first ``N`` terms of the ``rdir``-diagonal of the power series
+    Try to replace the annihilating operator ``L`` of the ``r``-diagonal of
+    $P/Q$ by a proper right factor, following Section 8.1 of Lairez: 
+    generate series terms of the diagonal (first using naive Taylor series expansion, 
+    then generating terms from the diagonal recurrence induced by the operator),
+    guess a smaller operator ``M`` with ``ore_algebra``, and certify it.
+
+    The certification means thus: when this function returns an operator of 
+    complexity strictly less than ``L``, that operator is a proper right factor
+    of L which also annihilates the diagonal.
+
+    !!! warning
+    
+        The returned operator, even if it is smaller, may or may not be minimal!
+        All that is guaranteed is that it is a right factor of the input operator
+        annihilating the diagonal.
+
+    This is an internal function for sage_periods, and is not meant to be
+    called by the user.
+    """
+
+    Alg = L.parent()
+    Dt = Alg.gen()
+    if L.order() <= 1:
+        return L
+
+    Rt = Alg.base_ring()
+
+    try:
+        # The number of seed terms must get the recurrence for the diagonal
+        # coefficients past its singular indices.
+        rec = L.to_S(_OreAlgebra(PolynomialRing(QQ, 'n'), 'Sn'))
+        lc_roots = rec.leading_coefficient().roots(ZZ, multiplicities=False) 
+        max_root = max([rt for rt in lc_roots if rt >= 0], default=-1)
+        n0 = rec.order() + max_root + 1 # Recurrence holds past this value.
+        if n0 > 200:                        # TODO: Add accounting of wall-clock time? Or a heuristic calculation based on number of cores detected on current machine?
+            verbose("Skipping minimization: too many seed terms required.",level=1)
+            print("Skipping minimization: too many seed terms required.")
+            return L
+
+        Ldeg = max((c.degree() for c in list(L.list())), default=0)
+        # Gather heuristic number of terms needed for guessing.
+        # VERY questionable. Is there a better way to do this?
+        # TODO:
+        # - Investigate SOTA literature bounds order and degree (BRS 21, ...others?)
+        # - Also investigate ``solver``, ``method`` and pass in ``ncpus`` parameter from caller.
+        # - Parallel methods for minimization: Bostan, Rivoal, Salvy 23,  Kauers-Koutschan 22
+        n_terms = max(120, 3 * (L.order() + 2) * (Ldeg + 4)) 
+        n_terms = min(n_terms, 600)
+        n_terms = max(n_terms, n0 + 50)
+
+        seeds = diagonal_series_terms(P, Q, r, n0)
+        data = rec.to_list(seeds, n_terms)
+        if data is None or any(c is None for c in data):
+            # TODO: Add timeout flag here, since we could need a small number of seed
+            # ...terms, while n_terms could be huge.
+            verbose("Skipping minimization: could not unroll the recurrence.",level=1)
+            print("Skipping minimization: could not unroll the recurrence.")
+            return L
+
+        M = _guess(data, Alg)
+    except (ValueError, ArithmeticError, ZeroDivisionError) as e:
+        verbose(f"Skipping minimization: {e}",level=1)
+        print(f"Skipping minimization: {e}")
+        return L
+
+    if M.order() >= L.order():
+        print("Guessed recurrence order exceeds L's order; keeping L.")
+        return L
+
+    # Certification step (relative to L).
+    quo, rem = L.quo_rem(M)
+    if rem != 0:                # TODO: Instead of blanket reject, can compute G = gcrd(L,M) and certify it!
+        verbose("Guessed operator does not right-divide L; keeping L.", level=1)
+        print("Guessed operator does not right-divide L; keeping L.")
+        return L
+
+    ind = quo.indicial_polynomial(Rt.gen())
+    sigma = max([rt for rt in ind.roots(ZZ, multiplicities=False) if rt >= 0], default=-1)
+
+    if sigma >= 0:
+        m = M.order()
+        need = sigma + m + 1
+        if need > len(data):
+            data = rec.to_list(seeds, need)
+            if data is None or any(c is None for c in data):
+                verbose("Skipping minimization: could not extend the series.", level=1)
+                print("Skipping minimization: could not extend the series.")
+                return L
+        ytr = Rt(data[:need])
+        Mc = list(M.list())
+        g = sum(Rt(Mc[i]) * ytr.derivative(i) for i in range(len(Mc)))
+        if any(g[j] != 0 for j in range(sigma + 1)):
+            verbose("Guessed operator fails the certification; keeping L.", level=1)
+            print("Guessed operator fails the certification; keeping L.")
+            return L
+
+    verbose(f"Minimization: order {L.order()} reduced to certified order {M.order()}.", level=1)
+    print(f"Minimization: order {L.order()} reduced to certified order {M.order()}.")
+    return sum(Alg(Rt(c)) * Dt**i for i, c in enumerate(list(M.list())))
+
+
+# The problem: naive .taylor() or PowerSeriesRing construction forces us to compute 
+# coefficients in a bigger box than we need, when we're not looking along main diagonal.
+
+# TODO: Further improvement directions:
+# - Better DP-style formulation?
+# - Parallelization via recursive doubling?
+# - Convert to Cython + statically type?
+
+def diagonal_series_terms(P, Q, r, N):
+    r"""
+    Return the first ``N`` terms of the ``r``-diagonal of the power series
     expansion of $P/Q$ at the origin, where $P$ and $Q$ are polynomials over
     $\mathbb{Q}$ in the same variables and $Q(0) \neq 0$.
 
@@ -125,16 +233,17 @@ def diagonal_series_terms(P, Q, rdir, N):
     called by the user.
     """
     d = P.parent().ngens()
+    assert len(r) == d, "r must have same length as number of generators of P and Q."
     zero = tuple([0] * d)
     Qd = {tuple(e): QQ(c) for e, c in Q.dict().items()}
     c0 = Qd.pop(zero, None)
     if c0 is None or c0 == 0:
         raise ValueError("The denominator vanishes at the origin, so the power series diagonal is not defined.")
-    box = tuple((N - 1) * ri for ri in rdir)
+    box = tuple((N - 1) * ri for ri in r)
     maxdeg = sum(box)
 
     # Homogeneous-layer recurrence for y = 1/Q: writing Q = c0 + (higher order),
-    # the degree-m part of y is y_m = -(1/c0) * sum_{|e|>=1} Q_e * y_{m-|e|}(shifted by e).
+    # the degree-m part of y is y_m = -(1/c0) * sum_{|e|>=1} Q_e * y_{m-|e|}.
     layers = {0: {zero: 1 / c0}}
     Qterms = [(e, c, sum(e)) for e, c in Qd.items()]
     for m in range(1, maxdeg + 1):
@@ -154,12 +263,12 @@ def diagonal_series_terms(P, Q, rdir, N):
     for lay in layers.values():
         ycoeff.update(lay)
 
-    # Multiply by P and extract the diagonal coefficients: the coefficient of
-    # x^(j*rdir) in P*y only involves the finitely many terms of P.
+    # Multiply by P and extract the diagonal coefficients;
+    # standard Cauchy product.
     Pd = {tuple(e): QQ(c) for e, c in P.dict().items()}
     terms = []
     for j in range(N):
-        target = tuple(j * ri for ri in rdir)
+        target = tuple(j * ri for ri in r)
         s = QQ(0)
         for e, c in Pd.items():
             rem = tuple(a - b for a, b in zip(target, e))

@@ -11,7 +11,7 @@ from sage.all import *
 from .diagonal import minimize_diagonal_annihilator, diagonal_to_period, normalize_diagonal_arguments
 from .preparation import compute_homogenization, compute_prepared_fraction, minimize_denominator_degree, probe_reduction_order
 from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, lift_operator_across_primes
-from .errors import SagePeriodsError, ReductionOrderTooSmallError, BadPrimeError, NeedMorePrimesError, ProbeBasisCapExceededError
+from .errors import *
 
 # Check if ore_algebra is available, and import it if so
 from . import _is_ore_algebra_installed
@@ -136,9 +136,14 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
 
     # TODO: Add possiblity of minimizing the diagonal operator using "guess and verify,"
     # plus rigourous verification of the minimization.
-    L_min = minimize_diagonal_annihilator
-
-    return L
+    if minimize:
+        Rvars = R_normalized.variables()
+        Ring_min = PolynomialRing(QQ,Rvars).fraction_field()
+        P = Ring_min(R_normalized).numerator()
+        Q = Ring_min(R_normalized).denominator()
+        return minimize_diagonal_annihilator(L,P,Q,r,L.parent().base_ring().gen())
+    else:
+        return L
 
     
 def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False, minimize_denom_deg = None, ncpus = None,ensure_termination=False):

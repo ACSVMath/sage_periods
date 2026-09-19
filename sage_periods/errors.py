@@ -37,9 +37,10 @@ class ReductionOrderTooSmallError(SagePeriodsError):
         self.r = r
     pass
 
-class ProbeBasisCapExceededError(SagePeriodsError):
-    """A probe exceeded its permitted basis size."""
-    # TODO
-    pass
+# !!! NOT NEEDED
+# class ProbeBasisCapExceededError(SagePeriodsError):
+#     """A probe exceeded its permitted basis size."""
+#     # TODO
+#     pass
 
 # Other possiblities: failed certification?
