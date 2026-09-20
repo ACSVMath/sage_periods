@@ -23,7 +23,7 @@ else:
 from sage.misc.verbose import verbose, set_verbose
 
 
-def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, reduction_order = None, minimize = False, certify = False, minimize_denom_deg = None, ncpus = None, ensure_termination = False):
+def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, reduction_order = None, minimize = False, certify = False, minimize_denom_deg = None, ncpus = 1, ensure_termination = False):
     r"""
     Given a symbolic rational function $R(x_1,...,x_d)$, compute a D-finite equation annihilating the $r$-diagonal of $R$.
 
@@ -141,12 +141,12 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
         Ring_min = PolynomialRing(QQ,Rvars).fraction_field()
         P = Ring_min(R_normalized).numerator()
         Q = Ring_min(R_normalized).denominator()
-        return minimize_diagonal_annihilator(L,P,Q,r,L.parent().base_ring().gen())
+        return minimize_diagonal_annihilator(L,P,Q,r,L.parent().base_ring().gen(),ncpus=ncpus)
     else:
         return L
 
     
-def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False, minimize_denom_deg = None, ncpus = None,ensure_termination=False):
+def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False, minimize_denom_deg = None, ncpus = 1, ensure_termination=False):
     r"""
     Given a symbolic rational function $R(t,x_1,...,x_n)$, compute a D-finite equation 
     annihilating the period integrals (i.e., residues) of $R$ with respect to $x_1,...,x_n$.

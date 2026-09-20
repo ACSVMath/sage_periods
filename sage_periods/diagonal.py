@@ -105,8 +105,11 @@ def diagonal_to_period(R, r, vari , t):
 # TODO: Further improvement directions:
 # - Make pull-request for implementing recursive doubling on the _to_list() method, to allow multiprocessing.
 # - OR, write a method which does this yourself! :)
+# - *** Implement the singularity-based degree-bounding methods found in "MINIMIZATION OF DIFFERENTIAL EQUATIONS
+# ...AND ALGEBRAIC VALUES OF E-FUNCTIONS" by Bostan-Rivoal-Salvy 2022; then L.order()-1 and this degree 
+# (dependent on order) as arguments for order and degree in _guess().
 # - Convert to Cython + statically type?
-def minimize_diagonal_annihilator(L, P, Q, r, t):
+def minimize_diagonal_annihilator(L, P, Q, r, t,ncpus=1):
     r"""
     Try to replace the annihilating operator ``L`` of the ``r``-diagonal of
     $P/Q$ by a proper right factor, following Section 8.1 of Lairez: 
@@ -167,7 +170,7 @@ def minimize_diagonal_annihilator(L, P, Q, r, t):
             print("Skipping minimization: could not unroll the recurrence.")
             return L
 
-        M = _guess(data, Alg)
+        M = _guess(data, Alg,ncpus=ncpus,method="linalg")
     except (ValueError, ArithmeticError, ZeroDivisionError) as e:
         verbose(f"Skipping minimization: {e}",level=1)
         print(f"Skipping minimization: {e}")
@@ -213,10 +216,8 @@ def minimize_diagonal_annihilator(L, P, Q, r, t):
 # coefficients in a bigger box than we need, when we're not looking along main diagonal.
 
 # TODO: Further improvement directions:
-# - Better DP-style formulation?
 # - Parallelization via recursive doubling?
-# - Convert to Cython + statically type?
-
+# - Convert to Cython + statically type? # NOTE: Did this; improved performance significantly. By around ~3.5-4x in random trials.
 def diagonal_series_terms(P, Q, r, N):
     r"""
     Return the first ``N`` terms of the ``r``-diagonal of the power series
@@ -245,7 +246,11 @@ def diagonal_series_terms(P, Q, r, N):
     # Homogeneous-layer recurrence for y = 1/Q: writing Q = c0 + (higher order),
     # the degree-m part of y is y_m = -(1/c0) * sum_{|e|>=1} Q_e * y_{m-|e|}.
     layers = {0: {zero: 1 / c0}}
-    Qterms = [(e, c, sum(e)) for e, c in Qd.items()]
+    Qterms = [                      # multiply by -1/c0 here, not in the inner loop.
+        (e, -c / c0, sum(e))
+        for e, c in Qd.items()
+        if all(a <= b for a, b in zip(e, box)) # Also, disacrd monomials outside the box early.
+    ]
     for m in range(1, maxdeg + 1):
         layer = {}
         for e, c, de in Qterms:
@@ -256,7 +261,8 @@ def diagonal_series_terms(P, Q, r, N):
                 enew = tuple(a + b for a, b in zip(ey, e))
                 if any(a > b for a, b in zip(enew, box)):
                     continue
-                layer[enew] = layer.get(enew, QQ(0)) - c * cy / c0
+                layer[enew] = layer.get(enew, QQ(0)) + c * cy
+        layer = {e: c for e, c in layer.items() if c}
         if layer:
             layers[m] = layer
     ycoeff = {}
