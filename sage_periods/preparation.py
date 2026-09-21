@@ -371,10 +371,10 @@ def _probe_reduction_order_once(a,f,r,ensure_termination,first_prime=None): # Fu
                 p = None
                 continue
 
-            if isinstance(exc,ReductionOrderTooSmallError) or isinstance(exc,ProbeBasisCapExceededError):
+            if isinstance(exc,ReductionOrderTooSmallError):
                 verbose(
                     f"    Probe at reduction order {r} was unusable: "
-                    f"{reason}.",
+                    f"{exc}.",
                     level=1,
                 )
                 return None

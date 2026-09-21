@@ -349,7 +349,10 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 # This is the only stage where it might be necessary to increase r.
                 #######################################################################################
                 try:
-                    rho0, M, B = compute_gauss_manin_connection(a,f,r,p)
+                    rho0, M, B = compute_gauss_manin_connection(a, f, r, p)
+                except BadPrimeError:
+                    bad_primes.append(p)
+                    continue
                 except ReductionOrderTooSmallError as e:
                     # Increase r (we're inside a try already)
                     raise e

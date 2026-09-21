@@ -37,16 +37,68 @@ def compute_gauss_manin_connection(a,f,r,p):
 
     """
     A = a.parent()
-    t = A.base_ring().gen()
-    bad_points = []
+    QQ_t = A.base_ring().ring()
+    bad_points = set()
 
-    # Build the K = GF(p)(t) we'll need for reconstruction
-    K = PolynomialRing(GF(p),t).fraction_field()
-    F = K.base_ring() # GF(p)
+    # Coefficient tables retain the parameter-polynomial layer GF(p)[t],
+    # while evaluated forms belong to AF = GF(p)[x_0, ..., x_n].
+    F = GF(p)
+    Rp = PolynomialRing(F, QQ_t.variable_name())
+    K = Rp.fraction_field()
     AF = A.change_ring(F) # This should equal RK.A across all RK
 
     # Reconstruction object for B and rho0
     H = ReconstructionData()
+
+    # Build coefficient tables for reducing a, f, f^delta mod p;
+    # instead of evaluating from SR once per point, per prime.
+    fdict = f.dict()
+    fdelta = A({ key: fdict[key].derivative() for key in fdict.keys()})
+
+    def _build_coefficient_table(poly):
+        r""" Reduces a polynomial ``poly`` in A to a dictionary indexed by
+        its ``A``-monomial exponent vectors, with values a pair ``(p_g,p_h)``
+        representing numerator and denominator polynomials in ``GF(p)[t]``
+        of the original ``K`-rational function coefficient.
+        """
+        table = [(e, Rp(c.numerator()), Rp(c.denominator()))
+                 for e, c in poly.dict().items()]
+        if any(den.is_zero() for _, _, den in table):
+            raise BadPrimeError(
+                "A coefficient denominator vanishes identically modulo p.",
+                p,
+                "gauss_manin",
+            )
+        return table
+
+    def _evaluate_coefficient_table(table, pt):
+        r"""
+        Evaluate a coefficient table (exponent, numerator, denominator) at the
+        point ``pt``, raising ``ZeroDivisionError`` when a coefficient
+        denominator vanishes there.
+        """
+        out = {}
+        for e, num, den in table:
+            d = den(pt)
+            if not d:
+                raise ZeroDivisionError("coefficient denominator vanishes at this point")
+            cv = num(pt) / d
+            if cv:
+                out[e] = cv
+        return AF(out)
+
+    try:
+        ftab = _build_coefficient_table(f)
+        fdeltatab = _build_coefficient_table(fdelta)
+        atab = _build_coefficient_table(a)
+    except BadPrimeError:
+        raise
+    except (ArithmeticError, TypeError, ValueError) as exc:
+        raise BadPrimeError(
+            "A coefficient of a, f, or f^delta cannot be reduced modulo p.",
+            p,
+            "gauss_manin",
+        ) from exc
 
     # Counter for seeing if we must increase r, or if we just had bad evaluation point
     rtoosmall = 0
@@ -57,9 +109,9 @@ def compute_gauss_manin_connection(a,f,r,p):
     # Main loop
     while True:
         u = ZZ.random_element(1, p)   # random evaluation point
-        u_QQ = QQ(u)                  # for substitution into coefficients over QQ(t)
-        u_K  = K(u)                   # for interpolation / storage mod p
-        if u in H.points or u in bad_points:
+        uF = F(u)
+        u_K = K(uF)                   # for interpolation / storage mod p
+        if u_K in H.points or uF in bad_points:
             continue
         verbose("        u: "+str(u),level=1)
 
@@ -69,16 +121,13 @@ def compute_gauss_manin_connection(a,f,r,p):
         uctr += 1
 
         # Try evaluating f, a, f^delta into our ring. If this fails, pick a new point.
-        fdict = f.dict()
-        fdelta = A({ key: fdict[key].derivative() for key in fdict.keys()}) #f^delta
-        
         try:
-            feval = AF(SR(f).subs({t:u_QQ}))
-            fdeltaeval = AF(SR(fdelta).subs({t:u_QQ}))
-            aeval = AF(SR(a).subs({t:u_QQ}))
-        except:
+            feval = _evaluate_coefficient_table(ftab, uF)
+            fdeltaeval = _evaluate_coefficient_table(fdeltatab, uF)
+            aeval = _evaluate_coefficient_table(atab, uF)
+        except ZeroDivisionError:
             verbose("Evaluations of f, a, or f^delta failed. Pick a different point.",level=1)
-            bad_points.append(u)
+            bad_points.add(uF)
             continue
             
         # Build our RhamKoszulData object with evaluated f
@@ -89,10 +138,13 @@ def compute_gauss_manin_connection(a,f,r,p):
             ret = gauss_manin_helper(U, fdeltaeval, [aeval], None)
         except ReductionOrderTooSmallError:
             rtoosmall += 1
-            bad_points.append(u)
+            bad_points.add(uF)
             if rtoosmall >= 3:
-                raise RuntimeError("INCREASE_R")
-                continue
+                raise ReductionOrderTooSmallError(
+                    "Exceeded filtration bound at least 3 times; increase r.",
+                    r,
+                )
+            continue
 
         # Extract results and add to interpolation routine. Proj is the |M| x 1 matrix expressing rho_0' in terms of M
         basis_key = ret.ebasis #gauss_manin_helper should return a tuple of tuples of tuples
