@@ -13,6 +13,8 @@ from sage.structure.element import parent
 
 from .poly_lin_alg import echelonized_basis_poly, linear_normal_form_p
 from .errors import ReductionOrderTooSmallError
+from .linear_closure import engine_gauss_manin_helper
+
 
 # For RhamKoszulData object.
 from dataclasses import dataclass, field 
@@ -28,6 +30,10 @@ from sage.misc.verbose import verbose, set_verbose
 '''
  Classes used to store (and cache) results of computations.
 '''
+
+# # DELETE LATER
+# import cProfile
+# _first_run = False
 
 @dataclass(slots=True)
 class RhamKoszulData:
@@ -61,6 +67,8 @@ class RhamKoszulData:
     # Eliminated fields variant and repmode.
     emod: object | None = None
     basis: object | None = None
+    # Linearized engine
+    eng: object | None = None
 
     def __init__(self,f,r=1):
         r"""
@@ -108,6 +116,8 @@ class RhamKoszulData:
         self.xring = R
         self.tox = tox
         self.fromx = fromx
+        self.eng=None
+
     
         # Store df and the x-variables in the encoded ring
         self.df = [tox(f.derivative(self.ring.gen(i))) for i in range(n)]
@@ -747,6 +757,37 @@ def gauss_manin_helper(U, der, L, ret=None):
             []
             
     """
+    # Over a prime finite field (the modular pipeline) the closure at
+    # reduction order >= 2 runs on the linearized engine, which performs
+    # the identical computation -- same normal forms, same pivot ordering,
+    # same caps -- on coefficient rows instead of polynomials.  At r = 1
+    # the closure is a plain chain of Griffiths-Dwork steps with no
+    # echelonizations, where the per-point setup of the engine costs more
+    # than it saves, so the polynomial implementation is kept there, as it
+    # is for all other base rings (and everywhere when
+    # SAGE_PERIODS_DISABLE_ENGINE=1 is set).
+    base = U.ring.base_ring()
+    if U.r >= 2 and base.is_finite() and base.is_prime_field():
+        # global _first_run
+        # if not _first_run:
+        #     print("First run-through of linear-closure Gauss-manin helper. Profiling...")
+        #     # profile this run.
+        #     # Instead of: return expensive_calculation()
+        #     prof = cProfile.Profile()
+        #     prof.enable()
+            
+        #     result = engine_gauss_manin_helper(U, der, L, ret=ret)
+            
+        #     prof.disable()
+        #     prof.print_stats(sort='cumulative')
+        #     _first_run = True
+        #     return result
+        # NOTE: Before, there was a function accessing an environment variable 
+        # "SAGE_PERIODS_DISABLE_ENGINE", which would allow a user to manually disable the linear engine.
+        # This seemed strange and unnecessary, so we deleted it.
+        # TODO: Add a way for the user to disable this as a global setting.
+        # Perhaps with a "context manager" class, like in Sage ACSV?
+        return engine_gauss_manin_helper(U, der, L, ret=ret)
 
     basis = []
     gm = []

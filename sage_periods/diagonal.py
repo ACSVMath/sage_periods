@@ -214,6 +214,8 @@ def minimize_diagonal_annihilator(L, P, Q, r, t,ncpus=1):
 
 # The problem: naive .taylor() or PowerSeriesRing construction forces us to compute 
 # coefficients in a bigger box than we need, when we're not looking along main diagonal.
+# The same is true of LazyPowerSeries. We tested it, and ours consistently outperformed it,
+# the advantage growing as our diagonal direction gets further and further from the main diagonal.
 
 # TODO: Further improvement directions:
 # - Parallelization via recursive doubling?

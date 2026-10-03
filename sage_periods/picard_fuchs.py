@@ -406,4 +406,5 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             r += 1
             continue
 
+    # _first_run = False
     return deq
