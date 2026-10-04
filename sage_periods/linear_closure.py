@@ -480,7 +480,7 @@ class LinearEngine:
         from .rham_koszul import _syz_quotients
         U = self.U
         quotients, syzlm_exps = _syz_quotients(U, deg)
-        filt = None
+        # filt = None
         # if U.profile is not None and U.profile.get("armed") and U.r == 2: # TODO
         #     filt = U.profile["syzlm"]
         # numpy views of the syzygy term exponents, for vectorized shifts.
@@ -497,8 +497,8 @@ class LinearEngine:
         liftlms = []
         for qe, i in quotients:
             liftlm = tuple(q + s for q, s in zip(qe, syzlm_exps[i]))
-            if filt is not None and liftlm not in filt:
-                continue
+            # if filt is not None and liftlm not in filt:
+            #     continue
             T, C = syz_np[i]
             shifted = (T + np.array(qe, dtype=np.int64)).tolist()
             row = {}
