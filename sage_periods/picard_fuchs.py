@@ -291,8 +291,8 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
 
     verbose("Starting to compute Picard-Fuchs operator using evaluation-interpolation.",level=1)
 
-    # Choose the reduction order.  If the user passed one, start there.
-    # If none was passed, probe r = 1 and r = 2 modulo one prime
+    # Choose the reduction order.  If the user passed r=1, start there.
+    # If none passed, probe r = 1 and r = 2 modulo one prime
     # and start at whichever produces the operator of smaller order, 
     # if both execution times are under 30 seconds.
     # Else, pick whichever one is faster.
@@ -301,7 +301,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     if reduction_order is None:
         verbose("Choosing the reduction order by probing modulo one prime.",level=1)
         # print(probe_reduction_order(a,f))
-        r, seed = probe_reduction_order(a, f,ensure_termination) # Future: add , "ncpus=ncpus", passed in from caller. Also, probe_reduction_order should return "profile" as well.
+        r, seed, profile = probe_reduction_order(a, f,ensure_termination) # Future: add , "ncpus=ncpus", passed in from caller. Also, probe_reduction_order should return "profile" as well.
         verbose(f"Auto-probe selected reduction order r = {r}.",level=1)
     else:
         r = Integer(reduction_order)
@@ -349,7 +349,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 # This is the only stage where it might be necessary to increase r.
                 #######################################################################################
                 try:
-                    rho0, M, B = compute_gauss_manin_connection(a, f, r, p)
+                    rho0, M, B = compute_gauss_manin_connection(a, f, r, p, profile=profile)
                 except BadPrimeError:
                     bad_primes.append(p)
                     continue
@@ -404,6 +404,9 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             deq = Alg(L_coeffs[m-1]*Dt**(m-1) - sum([L_coeffs[k]*(Dt**k) for k in range(m-1)]))
         except ReductionOrderTooSmallError as e:
             r += 1
+            # Reset profile and seeded operator because they belong to previous r/
+            profile = {}
+            seed = {}
             continue
 
     # _first_run = False

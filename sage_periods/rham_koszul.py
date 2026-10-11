@@ -65,12 +65,23 @@ class RhamKoszulData:
     v: object | None = None
     vshift: int = 0 
     # Eliminated fields variant and repmode.
+    # For profiling: profile is shared across points and primes, profile_state
+    # tells us whether we're in "get" / "set" mode for the profile, or it's unused.
+    # used_syzlms and wdown_liftlsm are per-point caches of leading monomial data.
+    profile: object | None = None # Dict {"syzlm" : list of lms, "tsyzlm" : list of lms}
+    profile_state: str = "off" 
+    # State descriptions: "off" -- uninitialized / not using profiling.
+    # "recording" -- capturing syzygy information, during the first run of compute_gm
+    # "armed" -- for subsequent rounds, when we're no longer capturing syzygies
+    # but filtering by what we *have* captured.
+    used_syzlms: set = field(default_factory=set)
+    wdown_liftlms: dict = field(default_factory=dict)
     emod: object | None = None
     basis: object | None = None
     # Linearized engine
     eng: object | None = None
 
-    def __init__(self,f,r=1):
+    def __init__(self,f,r=1,profile=None):
         r"""
         Initialise the Rham-Koszul reduction context attached to a homogeneous polynomial $f$.
 
@@ -117,7 +128,14 @@ class RhamKoszulData:
         self.tox = tox
         self.fromx = fromx
         self.eng=None
-
+        self.profile=profile
+        # Profiling only applies to r=2.
+        if profile["syzlm"] is not None:
+            self.record_profile = False
+        else:
+            self.record_profile = (profile is not None and r==2) # TODO: this is a little bit redundant as of now! FIX!
+        self.used_syzlms=set()
+        self.wdown_liftlms={}
     
         # Store df and the x-variables in the encoded ring
         self.df = [tox(f.derivative(self.ring.gen(i))) for i in range(n)]
@@ -146,14 +164,27 @@ class RhamKoszulData:
         # Compute Groebner basis for Syz; this suffices, via Lemma 32 in Lairez 2016
         self.syz = [p for p in self.jac if p.degree(u) < n]
 
-        # Generate Groebner basis for lms of Trivial Syzygies
-        triv_syz = [
-            self.df[i] * self.gens[j+1] - 
-            self.df[j] * self.gens[i+1] 
-            for i in range(n) 
-            for j in range (i+1,n)
-            ] + xrels
-        self.tsyzlm = [p.lm() for p in self.xring.ideal(triv_syz).groebner_basis()] if triv_syz else []
+        # Generate Groebner basis for lms of Trivial Syzygies, conditional on needing them (r>1)
+        if self.r > 1:
+            if profile is not None and "tsyzlm" in profile:
+                # Reuse the leading monomial exponents recorded at an earlier
+                # (generic) evaluation point; a degenerate point where they
+                # would differ leads to a differing basis key downstream, so
+                # nothing incorrect can be reconstructed from this.
+                self.tsyzlm = [R.monomial(*e) for e in profile["tsyzlm"]]
+            else:
+                triv_syz = [
+                    self.df[i] * self.gens[j+1] -
+                    self.df[j] * self.gens[i+1]
+                    for i in range(n)
+                    for j in range(i+1, n)
+                    ] + xrels
+                    
+                self.tsyzlm = [p.lm() for p in self.xring.ideal(triv_syz).groebner_basis()]
+                if profile is not None:
+                    profile["tsyzlm"] = [tuple(m.exponents()[0]) for m in self.tsyzlm]
+        else:
+            self.tsyzlm = []
         
 
 @dataclass(slots=True)
@@ -272,9 +303,9 @@ def _syz_quotients(U, deg):
 
     TODO: How will this integrate with profiling?
     """
-    # The staircase walk below depends only on the *leading monomials* of the
+    # The staircase walk below depends only on the leading monomials of the
     # syzygy Groebner basis and of the trivial syzygy module, not on their
-    # coefficients.  These leading monomial patterns are the same at every
+    # coefficients. These leading monomial patterns are the same at every
     # non-degenerate evaluation point and prime, so the enumerated quotient
     # exponents are cached across calls, keyed by the leading monomial data.
     syzlm_exps = [tuple(s.lm().exponents()[0]) for s in U.syz]
@@ -323,17 +354,18 @@ def _basis_syzygies_with_lms(U, deg):
     ring = U.xring
     quotients, syzlm_exps = _syz_quotients(U, deg)
 
-    # When the profile is armed, keep only the lifts whose leading monomial
-    # was recorded as contributing a pivot at the recording point.  Every
-    # returned element is a multiple of a syzygy either way, so the reduction
-    # built from a filtered set still only quotients by exact forms; at a
-    # generic point the filtered set spans the same space X^r_q, and at a
-    # degenerate point the differing basis key is rejected downstream.
+    # When record_profile == True, keep only the lifts whose leading monomial
+    # was recorded as contributing a pivot in a previous round.  
+    filt = None
+    if U.profile is not None and U.r == 2 and U.record_profile:
+        filt = U.profile["syzlm"]
 
     ret = []
-    liftlms = [] # TODO: Later, liftlms will be used by basis_U in tracking profiling information.
+    liftlms = []
     for qe, i in quotients:
         liftlm = tuple(q + s for q, s in zip(qe, syzlm_exps[i]))
+        if filt is not None and liftlm not in filt:
+            continue # QUESTION: Can it ever happen that we've already profiled and yet filt is none? Redundant condition..
         ret.append(ring.monomial(*qe) * U.syz[i])
         liftlms.append(liftlm)
     return ret, liftlms
@@ -560,8 +592,9 @@ def basis_U(U, r, q):
     if r == 1:
         # Base case: X^1_q = d A_{q-1}.  The non-trivial syzygies supply the A-part,
         # and cast_syzygies applies d in the chosen representation mode.
-        syz = basis_syzygies(U, q - U.deg)
+         syz, liftlms = _basis_syzygies_with_lms(U, q - U.deg)
         U.basisWdown[(r, q)] = [exterior_derivative(U, p) for p in syz] # cast_syzygies, in the r=1 case.
+        U.wdown_liftlms[(r, q)] = liftlms
         U.basis_U[(r, q)] = []
         return None
     if r > 1:
@@ -573,9 +606,24 @@ def basis_U(U, r, q):
 
         # Push the stored lower-degree tail down by one Griffiths-Dwork step.
         rels = elementary_reduction_step(U, U.basisWdown[(r - 1, q + U.deg)])
+        inputs = U.basis_U[(r-1,q)] + rels
 
-        # Echelonize together the previous degree-q slice and the newly produced relations.  
-        new = echelonized_basis_poly(U.basis_U[(r-1,q)]+rels, return_matrix=False)
+        if r == 2 and U.record_profile: # TODO: There is a better way to do this. Clean up / organize for conceptual clarity.
+            # Record which syzygy staircase lifts contribute pivots.  The
+            # exterior derivative and the Griffiths-Dwork step act elementwise,
+            # so at this level the i-th relation is the image of the i-th
+            # lift, and a row basis of the input rows singles out a subset of
+            # lifts spanning the same space X^2_q.
+            new, piv = echelonized_basis_poly(inputs, return_matrix=False,
+                                              return_pivot_rows=True)
+            off = len(U.basis_U[(r-1, q)])
+            liftlms = U.wdown_liftlms.get((r - 1, q + U.deg), [])
+            for i in piv:
+                if i >= off and i - off < len(liftlms):
+                    U.used_syzlms.add(liftlms[i - off])
+        else:
+            # Echelonize together the previous degree-q slice and the newly produced relations.
+            new = echelonized_basis_poly(inputs, return_matrix=False)
 
         # Split the resulting echelon basis into the exact-degree-q pivot part and the strict lower-degree tail.
         U.basis_U[(r, q)], U.basisWdown[(r, q)] = [p for p in new if p.degree() == q], [p for p in new if p.degree() < q]
@@ -768,23 +816,6 @@ def gauss_manin_helper(U, der, L, ret=None):
     # SAGE_PERIODS_DISABLE_ENGINE=1 is set).
     base = U.ring.base_ring()
     if U.r >= 2 and base.is_finite() and base.is_prime_field():
-        # global _first_run
-        # if not _first_run:
-        #     print("First run-through of linear-closure Gauss-manin helper. Profiling...")
-        #     # profile this run.
-        #     # Instead of: return expensive_calculation()
-        #     prof = cProfile.Profile()
-        #     prof.enable()
-            
-        #     result = engine_gauss_manin_helper(U, der, L, ret=ret)
-            
-        #     prof.disable()
-        #     prof.print_stats(sort='cumulative')
-        #     _first_run = True
-        #     return result
-        # NOTE: Before, there was a function accessing an environment variable 
-        # "SAGE_PERIODS_DISABLE_ENGINE", which would allow a user to manually disable the linear engine.
-        # This seemed strange and unnecessary, so we deleted it.
         # TODO: Add a way for the user to disable this as a global setting.
         # Perhaps with a "context manager" class, like in Sage ACSV?
         return engine_gauss_manin_helper(U, der, L, ret=ret)

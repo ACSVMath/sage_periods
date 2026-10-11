@@ -260,10 +260,16 @@ def minimize_denominator_degree(R, xgens, rounds=3, concurrent=10, time_cap=30.0
 
 # NOTE: This function assumes that, generically, a call with r=1 will be faster than a call with r=2.
 # We should see how reasonable this assumption is.
-def probe_reduction_order(a, f,ensure_termination): # Future: add flag ncpus=None for delegation in Stage 1.
+def probe_reduction_order(a, f,ensure_termination,ncpus=None):
     r"""
     Probe r=2 for at most 30 seconds, followed by r=1 if r=2
-    completes. Return ``(reduction_order, seed, profile)``.
+    completes. Return ``(reduction_order, seed, profile)``,
+    where ``reduction_order`` is optimal choice of ``r``, 
+    ``seed`` is a list of coefficients corresponding to an operator
+    modulo one prime, and ``profile`` (if r==2) is our syzygy profile.
+
+    TODO: Make sure that ``seed`` and ``profile`` are selected after stabilization!
+    We wouldn't want them to be caused by a degenerate specialization!
     """
     context = multiprocessing.get_context()
     pool = context.Pool(processes=1)
@@ -272,8 +278,8 @@ def probe_reduction_order(a, f,ensure_termination): # Future: add flag ncpus=Non
         # Run serially inside the timeout process. This prevents the process
         # being terminated while it owns a nested multiprocessing pool.
         pending = pool.apply_async(
-            _probe_reduction_order_once,
-            (a, f, 2,ensure_termination,None), # Future: add " , 1" as arguments
+            _probe_reduction_order_helper,
+            (a, f, 2,ensure_termination,None,1),
         )
 
         result_r2 = pending.get(timeout=30.0)
@@ -284,7 +290,7 @@ def probe_reduction_order(a, f,ensure_termination): # Future: add flag ncpus=Non
             "selecting reduction order 1.",
             level=1,
         )
-        return 1, {} # Future: add another empty dict here, for the profile.
+        result_r2 = None
 
     finally:
         # On timeout this stops the running computation. On success it
@@ -293,7 +299,7 @@ def probe_reduction_order(a, f,ensure_termination): # Future: add flag ncpus=Non
         pool.join()
 
     # r=2 completed. Probe r=1 with the same prime
-    result_r1 = _probe_reduction_order_once(
+    result_r1 = _probe_reduction_order_helper(
         a,
         f,
         1,
@@ -303,6 +309,7 @@ def probe_reduction_order(a, f,ensure_termination): # Future: add flag ncpus=Non
             if result_r2 is not None
             else None
         ),
+        ncpus=1,
     )
 
     usable = [
@@ -312,8 +319,8 @@ def probe_reduction_order(a, f,ensure_termination): # Future: add flag ncpus=Non
     ]
 
     if not usable:
-        # Both r=1 and r=2 were bad; start main loop at r=3.
-        return 3, {} # Future: add another empty dict here, for the profile.
+        # Both r=1 and r=2 were bad; start main loop at r=3, with no seed data.
+        return 3, {}, {}
 
     choice = min(usable, key=lambda result: result["score"])
 
@@ -323,11 +330,11 @@ def probe_reduction_order(a, f,ensure_termination): # Future: add flag ncpus=Non
         else {}
     )
 
-    return choice["r"], seed # Future: add choice["profile"]
+    return choice["r"], seed, choice["profile"]
 
-def _probe_reduction_order_once(a,f,r,ensure_termination,first_prime=None): # Future-proofing: add flag for ncpus!
+def _probe_reduction_order_helper(a,f,r,ensure_termination,first_prime=None,ncpus=1):
     r"""Compute one modular probe and its comparison score."""
-    # profile = {} # For future reference
+    profile = {}
     p = first_prime
 
     for attempt in range(5):
@@ -335,7 +342,7 @@ def _probe_reduction_order_once(a,f,r,ensure_termination,first_prime=None): # Fu
             p = random_prime(2**26 - 1,proof=True,lbound=2**23,)
 
         try:
-            rho0, M, B = compute_gauss_manin_connection(a,f,r,p) # Future: Add arguments profile=profile, ncpus=ncpus (passed in from caller)
+            rho0, M, B = compute_gauss_manin_connection(a,f,r,p,profile=profile) # Future: Add argument ncpus=ncpus (passed in from caller)
             
             if len(M) == 0 or rho0.nrows() == 0:
                 # The reduced class vanishes: the operator is 1.
@@ -363,7 +370,7 @@ def _probe_reduction_order_once(a,f,r,ensure_termination,first_prime=None): # Fu
                 level=1,
             )
 
-            return {"r": r,"prime": p,"coeffs": coeffs, "score": score} # Future: also return "profile": profile,
+            return {"r": r,"prime": p,"coeffs": coeffs, "score": score, "profile": profile}
 
         except Exception as exc:
 

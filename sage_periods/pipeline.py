@@ -9,15 +9,8 @@ from collections import Counter # For Stage 3
 
 from sage.misc.verbose import verbose, set_verbose
 
-
-
-# Core modular loop / state handler
-def _modular_reduction_pipeline():
-
-    pass
-
 # Stage 1
-def compute_gauss_manin_connection(a,f,r,p):
+def compute_gauss_manin_connection(a,f,r,p,profile=None):
     r"""
     Compute the Gauss-Manin matrix $B$ for the map defined by closing $\rho_0$ under the map $\rho \mapsto [f^\delta \rho]_r$,
     as described in Section 7.2 of Lairez 2016. Also returns the basis for the space and the projection of $a$ into this space.
@@ -30,6 +23,10 @@ def compute_gauss_manin_connection(a,f,r,p):
     * ``f`` -- A square-free polynomial representing the square-free denominator of the function under consideration.
     * ``r`` -- Order of the reduction $[\cdot]_r$ which we compute.
     * ``p`` -- The characteristic of the field which we evaluate ``a`` and ``f`` into to do our reductions.
+    * ``profile`` -- (Optional) A dictionary shared across primes and points
+      implementing the "profile" variant of the MAGMA package for ``r = 2``.
+      It recors which syzygy staircase lifts contribute to our reduction,
+      so later points only enumerate those. Tremendous time-saver.
     
     OUTPUT: 
     
@@ -131,7 +128,7 @@ def compute_gauss_manin_connection(a,f,r,p):
             continue
             
         # Build our RhamKoszulData object with evaluated f
-        U = RhamKoszulData(feval,r=r)
+        U = RhamKoszulData(feval,r=r,profile=profile)
         
         # Run gauss_manin_helper on <fteval,[aeval]>, with our prime and r
         try:
@@ -157,6 +154,7 @@ def compute_gauss_manin_connection(a,f,r,p):
 
         # Stability is handled by recon_add_rat, we just need to check if candidate has been assigned
         if H.candidate is not None:
+            # TODO: M: Perhaps add profiling setting here? Idk...
             return H.candidate[0], basis, H.candidate[1] # rho0, M, B
         # Else, continue.
 
@@ -278,6 +276,8 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
         try:
             out = [Rp(c) for c in out]
         except Exception:
+            # TODO: Fix! This is the wrong type of error to raise, here. having a bad prime won't affect denominator clearing.
+            # Throwing away an entire prime is one way of fixing it, but is very wasteful.
             raise BadPrimeError("Last line of compute_reductions_dependency", prime=F.characteristic(),stage="dependency")
         return out
 
@@ -507,3 +507,4 @@ def lift_operator_across_primes(t, Lp_coeffs_dict, bad_primes):
     verbose("        Successfully lifted! :) Returning operator.",level=1)
         
     return lifted
+    
