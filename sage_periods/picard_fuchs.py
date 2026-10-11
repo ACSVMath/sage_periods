@@ -12,6 +12,7 @@ from .diagonal import minimize_diagonal_annihilator, diagonal_to_period, normali
 from .preparation import compute_homogenization, compute_prepared_fraction, minimize_denominator_degree, probe_reduction_order
 from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, lift_operator_across_primes
 from .errors import *
+from .profiling import ProfileData
 
 # Check if ore_algebra is available, and import it if so
 from . import _is_ore_algebra_installed
@@ -297,11 +298,11 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     # if both execution times are under 30 seconds.
     # Else, pick whichever one is faster.
     seed = {}
-    profile = {}
+    profile = ProfileData()
     if reduction_order is None:
         verbose("Choosing the reduction order by probing modulo one prime.",level=1)
-        # print(probe_reduction_order(a,f))
-        r, seed, profile = probe_reduction_order(a, f,ensure_termination) # Future: add , "ncpus=ncpus", passed in from caller. Also, probe_reduction_order should return "profile" as well.
+        # NOTE: This function modifies profile in place
+        r, seed = probe_reduction_order(a, f,ensure_termination, profile=profile) # Future: add , "ncpus=ncpus", passed in from caller.
         verbose(f"Auto-probe selected reduction order r = {r}.",level=1)
     else:
         r = Integer(reduction_order)
@@ -315,8 +316,11 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
         verbose("    r: " + str(r),level=1)
         try:
             ### Run the modular algorithm, with fixed r ###
-            # Hold coefficients for our Picard-Fuchs operator over F_p(t) in a dictionary keyed by p
-            Lp_coeffs_dict = {}
+            # Hold coefficients for our Picard-Fuchs operator over F_p(t) in a dictionary keyed by p.
+            # Start from the probe's operator (if any): it was computed at this same r,
+            # so it is a valid pre-evaluated modular operator, and its prime can then be
+            # checked (and discarded, along with any profile it produced) in Stage 3.
+            Lp_coeffs_dict = dict(seed)
             # Store primes p which can't be used in CRT lifting
             bad_primes = [] 
             primectr = 0
@@ -349,6 +353,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 # This is the only stage where it might be necessary to increase r.
                 #######################################################################################
                 try:
+                    # NOTE: This function modifies profile in place
                     rho0, M, B = compute_gauss_manin_connection(a, f, r, p, profile=profile)
                 except BadPrimeError:
                     bad_primes.append(p)
@@ -385,6 +390,17 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 try:
                     L_coeffs = lift_operator_across_primes(t,Lp_coeffs_dict,bad_primes)
                 except NeedMorePrimesError:
+                    L_coeffs = None
+
+                # lift_operator_across_primes appends degenerate primes to bad_primes
+                # (whether or not the lift succeeds). If the prime that produced our
+                # profile was discarded, the profile may be degenerate too: reset it,
+                # so that it is re-recorded at the next prime.
+                if profile.prof_prime is not None and profile.prof_prime in bad_primes:
+                    verbose(f"Profile prime {profile.prof_prime} was discarded; resetting profile.",level=1)
+                    profile.reset()
+
+                if L_coeffs is None:
                     # Either we pruned out too many primes in CRT, or we don't have enough to rationally reconstruct. Add more.
                     verbose("Rational reconstruction failed to lift one or more of our coefficients. Need more primes.",level=1)
                     continue
@@ -404,8 +420,8 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             deq = Alg(L_coeffs[m-1]*Dt**(m-1) - sum([L_coeffs[k]*(Dt**k) for k in range(m-1)]))
         except ReductionOrderTooSmallError as e:
             r += 1
-            # Reset profile and seeded operator because they belong to previous r/
-            profile = {}
+            # Reset profile and seeded operator because they belong to the previous r.
+            profile.reset()
             seed = {}
             continue
 

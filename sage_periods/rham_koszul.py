@@ -65,15 +65,20 @@ class RhamKoszulData:
     v: object | None = None
     vshift: int = 0 
     # Eliminated fields variant and repmode.
-    # For profiling: profile is shared across points and primes, profile_state
-    # tells us whether we're in "get" / "set" mode for the profile, or it's unused.
-    # used_syzlms and wdown_liftlsm are per-point caches of leading monomial data.
-    profile: object | None = None # Dict {"syzlm" : list of lms, "tsyzlm" : list of lms}
-    profile_state: str = "off" 
-    # State descriptions: "off" -- uninitialized / not using profiling.
-    # "recording" -- capturing syzygy information, during the first run of compute_gm
-    # "armed" -- for subsequent rounds, when we're no longer capturing syzygies
-    # but filtering by what we *have* captured.
+    # For profiling: ``profile`` is the ``ProfileData`` shared across points and
+    # primes. The remaining fields are per-point (per-fibre) data:
+    # - ``record_profile``: this fibre records a candidate profile (state "recording", r = 2).
+    # - ``profile_active``: this fibre uses the armed profile (state "armed", r = 2,
+    #   and matching syzygy-generator leading monomials).
+    # - ``syzlm_exps`` / ``tsyzlm_exps``: exponent tuples of the leading monomials
+    #   of ``syz`` and ``tsyzlm``.
+    # - ``used_syzlms``: leading monomials of the staircase lifts contributing a pivot.
+    # - ``wdown_liftlms``: leading monomials of the lifts behind each ``basisWdown[(1, q)]``.
+    profile: object | None = None
+    record_profile: bool = False
+    profile_active: bool = False
+    syzlm_exps: tuple = ()
+    tsyzlm_exps: tuple = ()
     used_syzlms: set = field(default_factory=set)
     wdown_liftlms: dict = field(default_factory=dict)
     emod: object | None = None
@@ -129,11 +134,6 @@ class RhamKoszulData:
         self.fromx = fromx
         self.eng=None
         self.profile=profile
-        # Profiling only applies to r=2.
-        if profile["syzlm"] is not None:
-            self.record_profile = False
-        else:
-            self.record_profile = (profile is not None and r==2) # TODO: this is a little bit redundant as of now! FIX!
         self.used_syzlms=set()
         self.wdown_liftlms={}
     
@@ -163,15 +163,22 @@ class RhamKoszulData:
     
         # Compute Groebner basis for Syz; this suffices, via Lemma 32 in Lairez 2016
         self.syz = [p for p in self.jac if p.degree(u) < n]
+        self.syzlm_exps = tuple(tuple(s.lm().exponents()[0]) for s in self.syz)
+
+        # Profiling only applies to r = 2. An armed profile is only used if this
+        # fibre's syzygy generators have the same leading monomials as the
+        # profiled fibres; otherwise this point is computed unfiltered.
+        use_profile = profile is not None and self.r == 2
+        self.record_profile = use_profile and profile.state == "recording"
+        self.profile_active = (use_profile and profile.state == "armed"
+                               and profile.syzgen_lms == self.syzlm_exps)
 
         # Generate Groebner basis for lms of Trivial Syzygies, conditional on needing them (r>1)
         if self.r > 1:
-            if profile is not None and "tsyzlm" in profile:
-                # Reuse the leading monomial exponents recorded at an earlier
-                # (generic) evaluation point; a degenerate point where they
-                # would differ leads to a differing basis key downstream, so
-                # nothing incorrect can be reconstructed from this.
-                self.tsyzlm = [R.monomial(*e) for e in profile["tsyzlm"]]
+            if self.profile_active:
+                # Reuse the leading monomial exponents of the accepted profile,
+                # avoiding a Groebner basis computation.
+                self.tsyzlm = [R.monomial(*e) for e in profile.tsyzlms]
             else:
                 triv_syz = [
                     self.df[i] * self.gens[j+1] -
@@ -179,12 +186,18 @@ class RhamKoszulData:
                     for i in range(n)
                     for j in range(i+1, n)
                     ] + xrels
-                    
                 self.tsyzlm = [p.lm() for p in self.xring.ideal(triv_syz).groebner_basis()]
-                if profile is not None:
-                    profile["tsyzlm"] = [tuple(m.exponents()[0]) for m in self.tsyzlm]
         else:
             self.tsyzlm = []
+        self.tsyzlm_exps = tuple(tuple(m.exponents()[0]) for m in self.tsyzlm)
+
+    def profile_candidate(self):
+        r"""
+        Return this fibre's candidate profile ``(tsyzlms, syzgen_lms, syzlms)``,
+        to be passed to ``ProfileData.add_profile_candidate`` once the
+        Gauss-Manin computation at this point has succeeded.
+        """
+        return (self.tsyzlm_exps, self.syzlm_exps, frozenset(self.used_syzlms))
         
 
 @dataclass(slots=True)
@@ -344,28 +357,27 @@ def _basis_syzygies_with_lms(U, deg):
     Same as ``basis_syzygies`` but also returns the leading monomial exponent
     of each returned lift.
 
+    When ``U.profile_active`` is set, only the lifts whose leading monomial
+    was recorded as contributing a pivot in the accepted profile are returned.
+
     This is an internal function for sage_periods, and is not meant to be
     called by the user.
-
-    TODO: Add capabilities for handling profile filter on the lifts,
-    when it is armed.
-
     """
     ring = U.xring
     quotients, syzlm_exps = _syz_quotients(U, deg)
 
-    # When record_profile == True, keep only the lifts whose leading monomial
-    # was recorded as contributing a pivot in a previous round.  
-    filt = None
-    if U.profile is not None and U.r == 2 and U.record_profile:
-        filt = U.profile["syzlm"]
+    # When the profile is armed (and applies to this fibre), keep only the lifts
+    # whose leading monomial was recorded as contributing a pivot.
+    filt = U.profile.syzlms if U.profile_active else None
 
     ret = []
     liftlms = []
+    # NOTE (10-11): Here, wouldn't it be better to instead, if filt is active, generate only those syzygies that *are* in filt?
+    # Not generate all of the syzygies
     for qe, i in quotients:
         liftlm = tuple(q + s for q, s in zip(qe, syzlm_exps[i]))
         if filt is not None and liftlm not in filt:
-            continue # QUESTION: Can it ever happen that we've already profiled and yet filt is none? Redundant condition..
+            continue
         ret.append(ring.monomial(*qe) * U.syz[i])
         liftlms.append(liftlm)
     return ret, liftlms
@@ -592,7 +604,7 @@ def basis_U(U, r, q):
     if r == 1:
         # Base case: X^1_q = d A_{q-1}.  The non-trivial syzygies supply the A-part,
         # and cast_syzygies applies d in the chosen representation mode.
-         syz, liftlms = _basis_syzygies_with_lms(U, q - U.deg)
+        syz, liftlms = _basis_syzygies_with_lms(U, q - U.deg)
         U.basisWdown[(r, q)] = [exterior_derivative(U, p) for p in syz] # cast_syzygies, in the r=1 case.
         U.wdown_liftlms[(r, q)] = liftlms
         U.basis_U[(r, q)] = []
@@ -608,7 +620,7 @@ def basis_U(U, r, q):
         rels = elementary_reduction_step(U, U.basisWdown[(r - 1, q + U.deg)])
         inputs = U.basis_U[(r-1,q)] + rels
 
-        if r == 2 and U.record_profile: # TODO: There is a better way to do this. Clean up / organize for conceptual clarity.
+        if r == 2 and U.record_profile:
             # Record which syzygy staircase lifts contribute pivots.  The
             # exterior derivative and the Griffiths-Dwork step act elementwise,
             # so at this level the i-th relation is the image of the i-th
@@ -754,9 +766,13 @@ def gauss_manin_helper(U, der, L, ret=None):
     * ``L`` -- A sequence of polynomials whose reduced classes generate the starting space.
     * ``ret`` -- An optional output record variable passed by reference.
 
+    Profiling (``r = 2``) is controlled by ``U.profile``: when ``U.record_profile``
+    is set, the pivot-contributing lifts are recorded into ``U.used_syzlms``;
+    when ``U.profile_active`` is set, the lifts are filtered by the armed profile.
+
     OUTPUT:
 
-    * ``ret`` -- An ``RKGaussManinData`` record whose fields are filled with:
+        * ``ret`` -- An ``RKGaussManinData`` record whose fields are filled with:
         * ``basis`` -- The monomial basis found by the closure process.
         * ``ebasis`` -- The exponent vectors of ``basis``.
         * ``proj`` -- The matrix expressing the reduced input classes in that basis.

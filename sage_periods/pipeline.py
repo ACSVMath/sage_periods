@@ -23,7 +23,7 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None):
     * ``f`` -- A square-free polynomial representing the square-free denominator of the function under consideration.
     * ``r`` -- Order of the reduction $[\cdot]_r$ which we compute.
     * ``p`` -- The characteristic of the field which we evaluate ``a`` and ``f`` into to do our reductions.
-    * ``profile`` -- (Optional) A dictionary shared across primes and points
+    * ``profile`` -- (Optional) A ``ProfileData`` object shared across primes and points, modified in place by this function.
       implementing the "profile" variant of the MAGMA package for ``r = 2``.
       It recors which syzygy staircase lifts contribute to our reduction,
       so later points only enumerate those. Tremendous time-saver.
@@ -36,6 +36,10 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None):
     A = a.parent()
     QQ_t = A.base_ring().ring()
     bad_points = set()
+
+    # Profiling applies only at r = 2: start recording if no profile is active yet.
+    if profile is not None and r == 2 and profile.state == "disabled":
+        profile.state = "recording"
 
     # Coefficient tables retain the parameter-polynomial layer GF(p)[t],
     # while evaluated forms belong to AF = GF(p)[x_0, ..., x_n].
@@ -143,6 +147,11 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None):
                 )
             continue
 
+        # The point succeeded: offer its profile as a candidate. The profile
+        # is armed once two consecutive candidates agree.
+        if U.record_profile:
+            profile.add_profile_candidate(U.profile_candidate(), p)
+
         # Extract results and add to interpolation routine. Proj is the |M| x 1 matrix expressing rho_0' in terms of M
         basis_key = ret.ebasis #gauss_manin_helper should return a tuple of tuples of tuples
         rho0_eval = ret.proj
@@ -154,7 +163,6 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None):
 
         # Stability is handled by recon_add_rat, we just need to check if candidate has been assigned
         if H.candidate is not None:
-            # TODO: M: Perhaps add profiling setting here? Idk...
             return H.candidate[0], basis, H.candidate[1] # rho0, M, B
         # Else, continue.
 
