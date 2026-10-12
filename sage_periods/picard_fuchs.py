@@ -43,14 +43,10 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
       ``minimize=True``, this certifies that the output annihilates
       the diagonal and is a right divisor of the operator computed when 
       ``minimize`` is set to ``False``.
-    * ``certify`` -- (Optional) When ``True``,
-      the partial certificates from Section 7.3 of Lairez are computed and verified
-      for operator annihilating the diagonal, and the pair ``(operator, certificate)`` 
-      is returned. When combined with ``minimize=True``, the returned operator is 
-      certified relative to the pre-minimization operator.
-    * ``minimize_denom_deg`` -- (Optional) Boolean flag enabling torus
-      change-of-variables preprocessing; see ``compute_period_annihilator``. Can
-      greatly speed up computation.
+    * ``certify`` -- Reserved for partial certificates; ``True`` currently raises
+      ``NotImplementedError``.
+    * ``minimize_denom_deg`` -- Reserved for torus degree minimization; ``True``
+      currently raises ``NotImplementedError``. ``None`` and ``False`` disable it.
     * ``ncpus`` -- (Optional) Parameter specifying number of CPU cores to use for
       multiprocessing.
     * ``ensure_termination`` -- (Optional) Some speedups (e.g. rank specialization in Stage 2) lack termination guarantees,
@@ -118,15 +114,24 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
     # - R's diagonal is zero, if we passed in different r.
     if R_normalized.numerator().is_constant() and R_normalized.denominator().is_constant():
         if r == None or all(r[i] == 1 or r[i] == Integer(1) for i in range(d)):
-            return compute_period_annihilator(R_normalized, t, Dt)
+            return compute_period_annihilator(
+                R_normalized, t, Dt, reduction_order=reduction_order, certify=certify,
+                minimize_denom_deg=minimize_denom_deg, ncpus=ncpus,
+                ensure_termination=ensure_termination)
         else:
-            return compute_period_annihilator(SR(0), t, Dt)
+            return compute_period_annihilator(
+                SR(0), t, Dt, reduction_order=reduction_order, certify=certify,
+                minimize_denom_deg=minimize_denom_deg, ncpus=ncpus,
+                ensure_termination=ensure_termination)
         
     # Compute diagonal transformation.
     G = diagonal_to_period(R_normalized,r,vari_normalized,t)
 
     # Compute period operator and/or certificates
-    L = compute_period_annihilator(G, t, Dt,reduction_order = reduction_order, certify = certify, minimize_denom_deg = minimize_denom_deg, ncpus = 1, ensure_termination = ensure_termination)
+    L = compute_period_annihilator(
+        G, t, Dt, reduction_order=reduction_order, certify=certify,
+        minimize_denom_deg=minimize_denom_deg, ncpus=ncpus,
+        ensure_termination=ensure_termination)
     # TODO: Add capability for returning certificate.
 
     # TODO: Add routine for verifying computed certificate.
@@ -159,14 +164,10 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     * ``Dt`` -- A string used to name the operator for differentiation with respect to ``t``.
     * ``reduction_order`` -- (Optional) The smallest order to start computing the modular Lairez reduction at. When ``None`` is passed in, a small order is selected
      which is likely to give the best combination of small operator size and small runtime.
-    * ``certify`` -- (Optional) When ``True``,
-      the partial certificates from Section 7.3 of Lairez are computed and verified
-      for operator annihilating the diagonal, and the pair ``(operator, certificate)`` 
-      is returned. When combined with ``minimize=True``, the returned operator is 
-      certified relative to the pre-minimization operator.
-    * ``minimize_denom_deg`` -- (Optional) Boolean flag enabling torus
-      change-of-variables preprocessing; see ``compute_period_annihilator``. Can
-      greatly speed up computation.
+    * ``certify`` -- Reserved for partial certificates; ``True`` currently raises
+      ``NotImplementedError``.
+    * ``minimize_denom_deg`` -- Reserved for torus degree minimization; ``True``
+      currently raises ``NotImplementedError``. ``None`` and ``False`` disable it.
     * ``ncpus`` -- (Optional) Parameter specifying number of CPU cores to use for
       multiprocessing.
     * ``ensure_termination`` -- (Optional) Some speedups (e.g. rank specialization in Stage 2) lack termination guarantees,
@@ -226,6 +227,11 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
         the variables of $R$ and $t$. But these symbolic variables may be shadowed by their fraction field counterparts.
 
     """
+
+    if certify:
+        raise NotImplementedError("Period certificates are not implemented yet.")
+    if minimize_denom_deg:
+        raise NotImplementedError("Denominator-degree minimization is not implemented yet.")
     verbose(f"Computing operator annihilating residue of {R}", level=1)
     
     '''
@@ -272,7 +278,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     verbose(f"The prepared fraction has the form (a,f,q) = {(a,f,q)}",level=1)
 
 
-    # TODO: Run degree minimization on the denominator, if it is called
+    # TODO: Denominator-degree minimization is currently unsupported (checked above).
 
 
     # Build OreAlgebra object associated with this ring (if possible)
@@ -320,6 +326,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             # Start from the probe's operator (if any): it was computed at this same r,
             # so it is a valid pre-evaluated modular operator, and its prime can then be
             # checked (and discarded, along with any profile it produced) in Stage 3.
+            degree_hint = None  # Relearn when the reduction order changes.
             Lp_coeffs_dict = dict(seed)
             # Store primes p which can't be used in CRT lifting
             bad_primes = [] 
@@ -354,7 +361,8 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 #######################################################################################
                 try:
                     # NOTE: This function modifies profile in place
-                    rho0, M, B = compute_gauss_manin_connection(a, f, r, p, profile=profile)
+                    rho0, M, B = compute_gauss_manin_connection(
+                        a, f, r, p, profile=profile, degree_hint=degree_hint)
                 except BadPrimeError:
                     bad_primes.append(p)
                     continue
@@ -362,6 +370,11 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                     # Increase r (we're inside a try already)
                     raise e
                 
+                if degree_hint is None:
+                    # Scheduling estimate only; later primes still require stability.
+                    degree_hint = max((c.numerator().degree() + c.denominator().degree()
+                                       for c in rho0.list() + B.list() if c), default=0) + 3
+
                 # If we get a trivial basis, then we're done.
                 if len(M) == 0 or rho0.nrows() == 0:
                     return Alg(1)

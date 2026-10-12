@@ -204,11 +204,11 @@ class ReconstructionData:
     recons: dict = field(default_factory=dict)
     tests: dict = field(default_factory=dict)
     candidate: object = None
-    num: int = 0
     points: set = field(default_factory=set)
     rand: dict = field(default_factory=dict)
     counter: int = 1
     nbticks: int = 1
+    first_tick: object = None  # Optional sample-count hint from an earlier prime.
 
     def __init__(self):
         r"""Create an empty reconstruction state record.
@@ -230,11 +230,11 @@ class ReconstructionData:
         self.recons = {}
         self.tests = {}
         self.candidate = None
-        self.num=0
         self.points = set()
         self.rand = {}
         self.counter = 1
         self.nbticks=1
+        self.first_tick = None
         return
 
     def reset(self):
@@ -242,7 +242,8 @@ class ReconstructionData:
         Reset the reconstruction state to its empty initial configuration.
 
         This clears all cached samples, test values, current reconstructions,
-        recorded points, and any candidate accumulated so far.
+        recorded points, and any candidate accumulated so far. The scheduling
+        hint ``first_tick`` is preserved; it is not reconstructed data.
 
         INPUT:
 
@@ -256,7 +257,6 @@ class ReconstructionData:
         self.recons = {}
         self.tests = {}
         self.candidate = None
-        self.num = 0
         self.points = set()
         self.rand = {}
         self.counter = 1
@@ -299,7 +299,7 @@ def recon_add_rat(H,val,point,xkey):
             sage: 
             sage: H.candidate
             None
-            sage: # recon_add_rat only tries a full reconstruction after 1, 6, 15, ... samples.
+            sage: # recon_add_rat only tries a full reconstruction after 1, 3, 6, 10, 15, ... samples.
             sage: # Using 15 points lets the stabilized reconstruction appear twice.
             sage: for u in range(15):
             sage:     u_F = F(u)
@@ -378,12 +378,17 @@ def recon_add_rat(H,val,point,xkey):
 
     all_tests = H.tests[key]
 
-    # Do not try reconstruction at every new point: back off geometrically to keep the overall cost low
-    H.nbticks -= 1
-    if H.nbticks > 0:
-        return
-    H.counter += 1
-    H.nbticks = H.counter
+    # A hint schedules attempts, not acceptance: stability is still checked below.
+    if H.first_tick is not None:
+        if len(all_tests) < H.first_tick:
+            return
+    else:
+        # Without a hint, try after 1, 3, 6, 10, ... samples.
+        H.nbticks -= 1
+        if H.nbticks > 0:
+            return
+        H.counter += 1
+        H.nbticks = H.counter
 
     # Get the points associated with these vals / tests
     points = Sequence(v[1] for v in all_tests)
@@ -393,45 +398,38 @@ def recon_add_rat(H,val,point,xkey):
 
     # Accept the reconstruction only after obtaining the same candidate twice
     if key in H.recons and H.recons[key] == recon:
-        if H.num > -1:
-            all_vals = H.vals[key]
-            cand = Sequence([])
-            den = K(0)
+        all_vals = H.vals[key]
+        cand = Sequence([])
 
-            # First recover a common denominator from the same random linear
-            # combination.  This is much cheaper than reconstructing denominators
-            # for all coordinates separately.
-            den = cauchy_interp_rational_fn(K, zip(points, [sum(all_vals[i][0][j] * rand[j] for j in range(len(L))) for i in range(len(points))]), criterion="total_degree").denominator()
+        # Reuse the denominator of the same random linear combination.
+        den = recon.denominator()
 
-            # Once the denominator is known, each numerator is just an ordinary interpolation problem.
-            if den.is_constant():
-                evden = [den for p in points]
-            else:
-                evden = [den(p) for p in points]
-            
-            '''
-                TODO:
-                Potential improvement: Cached batch reconstruction of the numerators? Or use one of the SOTA methods?
-                And also cache our reconstruction of the denominator.
-            '''
-            for j in range(len(L)):
-                cand.append(Rt.lagrange_polynomial(list(zip(points, Sequence(evden[i] * all_vals[i][0][j] for i in range(len(points)))))))
-
-            # Now, cand is a sequence of same length as L, containing our reconstruction attempt
-            if max((p.degree() for p in cand), default=ZZ(-1)) > QQ(2) * len(points) / 3:
-                # Bad luck: the sampling is not good
-                # This happens so rarely that we just throw away everything
-                H.reset()
-                return 
-
-            # Otherwise, we have a good reconstruction candidate
-            # Rebuild our pair entries separately, then assign candidate
-            rho0_cand = Sequence(p / den for p in cand[:bkpt])
-            B_cand = Sequence(p / den for p in cand[bkpt:])
-
-            H.candidate = ( matrix(rho0_cand[0].parent(), *shape_rho0, rho0_cand), matrix(B_cand[0].parent(), *shape_B, B_cand) )
+        # Once the denominator is known, each numerator is just an ordinary interpolation problem.
+        if den.is_constant():
+            evden = [den for p in points]
         else:
-            H.num += 1
+            evden = [den(p) for p in points]
+        
+        '''
+            TODO:
+            Potential improvement: Cached batch reconstruction of the numerators? Or use one of the SOTA methods?
+        '''
+        for j in range(len(L)):
+            cand.append(Rt.lagrange_polynomial(list(zip(points, Sequence(evden[i] * all_vals[i][0][j] for i in range(len(points)))))))
+
+        # Now, cand is a sequence of same length as L, containing our reconstruction attempt
+        if max((p.degree() for p in cand), default=ZZ(-1)) > QQ(2) * len(points) / 3:
+            # Bad luck: the sampling is not good
+            # This happens so rarely that we just throw away everything
+            H.reset()
+            return 
+
+        # Otherwise, we have a good reconstruction candidate
+        # Rebuild our pair entries separately, then assign candidate
+        rho0_cand = Sequence(p / den for p in cand[:bkpt])
+        B_cand = Sequence(p / den for p in cand[bkpt:])
+
+        H.candidate = ( matrix(rho0_cand[0].parent(), *shape_rho0, rho0_cand), matrix(B_cand[0].parent(), *shape_B, B_cand) )
 
     H.recons[key] = recon
     return

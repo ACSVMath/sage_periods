@@ -10,7 +10,7 @@ from collections import Counter # For Stage 3
 from sage.misc.verbose import verbose, set_verbose
 
 # Stage 1
-def compute_gauss_manin_connection(a,f,r,p,profile=None):
+def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None):
     r"""
     Compute the Gauss-Manin matrix $B$ for the map defined by closing $\rho_0$ under the map $\rho \mapsto [f^\delta \rho]_r$,
     as described in Section 7.2 of Lairez 2016. Also returns the basis for the space and the projection of $a$ into this space.
@@ -28,6 +28,10 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None):
       It recors which syzygy staircase lifts contribute to our reduction,
       so later points only enumerate those. Tremendous time-saver.
     
+    * ``degree_hint`` -- Optional sample count before the first reconstruction
+      attempt; subsequent attempts occur at each new point. This is a scheduling
+      hint only, and does not bypass the reconstruction stability check.
+
     OUTPUT: 
     
     * $M$, $\rho_0(t)$ and $B(t)$ as described in Section 7.2 of Lairez 2016.
@@ -50,6 +54,7 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None):
 
     # Reconstruction object for B and rho0
     H = ReconstructionData()
+    H.first_tick = degree_hint
 
     # Build coefficient tables for reducing a, f, f^delta mod p;
     # instead of evaluating from SR once per point, per prime.
@@ -103,9 +108,6 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None):
 
     # Counter for seeing if we must increase r, or if we just had bad evaluation point
     rtoosmall = 0
-    # Counter for seeing how many points we've evaluated; useful for breaking out if we suspect a bad prime
-    uctr = 0
-    gauss_manin_helper_times = []
 
     # Main loop
     while True:
@@ -115,11 +117,6 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None):
         if u_K in H.points or uF in bad_points:
             continue
         verbose("        u: "+str(u),level=1)
-
-        # Heuristically decide if we've encountered a prime that causes a
-        # degenerate specialization. If we end up running a TON of points
-        # for an example, then we label this prime as bad and break out.
-        uctr += 1
 
         # Try evaluating f, a, f^delta into our ring. If this fails, pick a new point.
         try:
@@ -238,11 +235,10 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
         # because the M we found in Stage 1 is canonical, as are rho0 and B.
         y = None
         independent = False
-        rhomat = Matrix(K,rho).transpose()
 
         # Compute rank
         if ensure_termination:
-            M = rhomat
+            M = Matrix(K,rho).transpose()
         else:
             M = Matrix(F,rho_ev)
 
@@ -253,6 +249,7 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
             # Possible dependency; decide exactly over GF(p)(t) by solving for
             # coefficients expressing rho_m in terms of the lower rho_k.
             try:
+                rhomat = M if ensure_termination else Matrix(K,rho).transpose()
                 y = rhomat[:,:m].solve_right(rho[m])
             except ValueError:
                 if not ensure_termination:
