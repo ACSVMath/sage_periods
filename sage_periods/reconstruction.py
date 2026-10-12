@@ -382,7 +382,7 @@ def recon_add_rat(H,val,point,xkey):
     H.nbticks -= 1
     if H.nbticks > 0:
         return
-    H.counter += 4
+    H.counter += 1
     H.nbticks = H.counter
 
     # Get the points associated with these vals / tests

@@ -830,11 +830,11 @@ def gauss_manin_helper(U, der, L, ret=None):
     # than it saves, so the polynomial implementation is kept there, as it
     # is for all other base rings (and everywhere when
     # SAGE_PERIODS_DISABLE_ENGINE=1 is set).
-    base = U.ring.base_ring()
-    if U.r >= 2 and base.is_finite() and base.is_prime_field():
-        # TODO: Add a way for the user to disable this as a global setting.
-        # Perhaps with a "context manager" class, like in Sage ACSV?
-        return engine_gauss_manin_helper(U, der, L, ret=ret)
+    # base = U.ring.base_ring()
+    # if U.r >= 2 and base.is_finite() and base.is_prime_field():
+    #     # TODO: Add a way for the user to disable this as a global setting.
+    #     # Perhaps with a "context manager" class, like in Sage ACSV?
+    #     return engine_gauss_manin_helper(U, der, L, ret=ret)
 
     basis = []
     gm = []

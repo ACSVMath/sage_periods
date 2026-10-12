@@ -126,7 +126,7 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
     G = diagonal_to_period(R_normalized,r,vari_normalized,t)
 
     # Compute period operator and/or certificates
-    L = compute_period_annihilator(G, t, Dt,ensure_termination=ensure_termination)
+    L = compute_period_annihilator(G, t, Dt,reduction_order = reduction_order, certify = certify, minimize_denom_deg = minimize_denom_deg, ncpus = 1, ensure_termination = ensure_termination)
     # TODO: Add capability for returning certificate.
 
     # TODO: Add routine for verifying computed certificate.

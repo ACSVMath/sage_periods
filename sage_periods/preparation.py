@@ -267,8 +267,9 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
     completes. Return ``(reduction_order, seed)``,
     where ``reduction_order`` is optimal choice of ``r`` and
     ``seed`` is a dict ``{prime: coeffs}`` for an operator modulo one prime.
-    The ``ProfileData`` object ``profile`` (if given) is overwritten in place
-    with the profile of the chosen reduction order.
+    If ``r = 2`` is chosen, the ``ProfileData`` object ``profile`` (if given)
+    is overwritten in place with the profile gathered by the ``r = 2`` probe;
+    otherwise it is left unchanged.
 
     TODO: Make sure that ``seed`` and ``profile`` are selected after stabilization!
     We wouldn't want them to be caused by a degenerate specialization!
@@ -276,14 +277,12 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
     context = multiprocessing.get_context()
     pool = context.Pool(processes=1)
 
-    # One candidate profile per reduction order. The r=2 probe runs in a worker
-    # process, so its profile is returned (pickled) in the result dict rather
-    # than modified in place.
-    prof1 = ProfileData()
-
     try:
         # Run serially inside the timeout process. This prevents the process
         # being terminated while it owns a nested multiprocessing pool.
+        # Profiling only applies at r=2. The worker runs in a separate process,
+        # so its profile is returned (pickled) in the result dict rather than
+        # modified in place.
         pending = pool.apply_async(
             _probe_reduction_order_helper,
             (a, f, 2, ensure_termination, None, ProfileData(), 1),
@@ -316,7 +315,6 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
             if result_r2 is not None
             else None
         ),
-        profile=prof1,
         ncpus=1,
     )
 
@@ -339,9 +337,9 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
         else {}
     )
 
-    # Choose whichever profile corresponds to the better r, and set that as our profile.
+    # Adopt the r=2 profile only if r=2 is chosen; otherwise leave it disabled.
     # (ProfileData uses slots, so we copy fields explicitly rather than via __dict__.)
-    if profile is not None:
+    if profile is not None and choice["r"] == 2:
         profile.copy_from(choice["profile"])
 
     return choice["r"], seed
@@ -385,7 +383,7 @@ def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None,
             )
 
             return {"r": r, "prime": p, "coeffs": coeffs, "score": score,
-                    "profile": profile if profile is not None else ProfileData()}
+                    "profile": profile}
 
         except Exception as exc:
 
