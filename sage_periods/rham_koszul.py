@@ -12,7 +12,7 @@ from sage.structure.element import parent
 
 
 from .poly_lin_alg import echelonized_basis_poly, linear_normal_form_p
-from .errors import ReductionOrderTooSmallError, ProbeBasisCapExceededError
+from .errors import ReductionOrderTooSmallError
 from .linear_closure import engine_gauss_manin_helper
 
 
@@ -746,7 +746,7 @@ def hom_reduce(U, L, r):
     return None
 
 
-def gauss_manin_helper(U, der, L, ret=None, max_basis=None):
+def gauss_manin_helper(U, der, L, ret=None):
     r"""
     Compute the finite-dimensional linear action induced by multiplication by ``-der``.
 
@@ -765,8 +765,6 @@ def gauss_manin_helper(U, der, L, ret=None, max_basis=None):
     * ``der`` -- A polynomial in ``U.ring``, typically the evaluated $f^\delta$.
     * ``L`` -- A sequence of polynomials whose reduced classes generate the starting space.
     * ``ret`` -- An optional output record variable passed by reference.
-    * ``max_basis`` -- Optional probe cap on the number of monomials in the
-      closure basis. Exceeding it raises ``ProbeBasisCapExceededError``.
 
     Profiling (``r = 2``) is controlled by ``U.profile``: when ``U.record_profile``
     is set, the pivot-contributing lifts are recorded into ``U.used_syzlms``;
@@ -852,9 +850,6 @@ def gauss_manin_helper(U, der, L, ret=None, max_basis=None):
         # Add the current frontier of monomials to the basis.
         xmons = sorted(xmons)
         basis.extend(xmons)
-        if max_basis is not None and len(basis) > max_basis:
-            raise ProbeBasisCapExceededError(
-                "Probe monomial basis exceeded its cap.", U.r, max_basis, len(basis))
         verbose("xmons:",level=1)
         verbose(xmons,level=1)
         verbose("basis:",level=1)

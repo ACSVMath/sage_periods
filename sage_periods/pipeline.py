@@ -10,7 +10,7 @@ from collections import Counter # For Stage 3
 from sage.misc.verbose import verbose, set_verbose
 
 # Stage 1
-def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,max_basis=None):
+def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None):
     r"""
     Compute the Gauss-Manin matrix $B$ for the map defined by closing $\rho_0$ under the map $\rho \mapsto [f^\delta \rho]_r$,
     as described in Section 7.2 of Lairez 2016. Also returns the basis for the space and the projection of $a$ into this space.
@@ -31,8 +31,6 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,max_bas
     * ``degree_hint`` -- Optional sample count before the first reconstruction
       attempt; subsequent attempts occur at each new point. This is a scheduling
       hint only, and does not bypass the reconstruction stability check.
-    * ``max_basis`` -- Optional probe cap, passed to ``gauss_manin_helper``.
-      ``ProbeBasisCapExceededError`` propagates to the probe's selection policy.
 
     OUTPUT: 
     
@@ -135,7 +133,7 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,max_bas
         
         # Run gauss_manin_helper on <fteval,[aeval]>, with our prime and r
         try:
-            ret = gauss_manin_helper(U, fdeltaeval, [aeval], max_basis=max_basis)
+            ret = gauss_manin_helper(U, fdeltaeval, [aeval], None)
         except ReductionOrderTooSmallError:
             rtoosmall += 1
             bad_points.add(uF)

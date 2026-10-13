@@ -37,12 +37,10 @@ class ReductionOrderTooSmallError(SagePeriodsError):
         self.r = r
     pass
 
-class ProbeBasisCapExceededError(SagePeriodsError):
-    """A probe exceeded its permitted monomial basis size."""
-    def __init__(self, message, r, max_basis, basis_size):
-        super().__init__(message)
-        self.r = r
-        self.max_basis = max_basis
-        self.basis_size = basis_size
+# !!! NOT NEEDED
+# class ProbeBasisCapExceededError(SagePeriodsError):
+#     """A probe exceeded its permitted basis size."""
+#     # TODO
+#     pass
 
 # Other possiblities: failed certification?
