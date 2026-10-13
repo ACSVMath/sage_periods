@@ -8,6 +8,7 @@ from .profiling import ProfileData
 
 from sage.misc.verbose import verbose
 import multiprocessing
+import traceback
 
 def compute_homogenization(R, k=None, t = None, homog_var = None):
     r"""
@@ -263,60 +264,43 @@ def minimize_denominator_degree(R, xgens, rounds=3, concurrent=10, time_cap=30.0
 # We should see how reasonable this assumption is.
 def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
     r"""
-    Probe r=2 for at most 30 seconds, followed by r=1 if r=2
-    completes. Return ``(reduction_order, seed)``,
+    Probe r=1 and r=2 concurrently in separate single-process workers.
+    Allow at most 30 seconds for r=2; r=1 has no timeout. Both start at
+    the same prime, with independent bad-prime retries.
+    Return ``(reduction_order, seed)``,
     where ``reduction_order`` is optimal choice of ``r`` and
     ``seed`` is a dict ``{prime: coeffs}`` for an operator modulo one prime.
     If ``r = 2`` is chosen, the ``ProfileData`` object ``profile`` (if given)
     is overwritten in place with the profile gathered by the ``r = 2`` probe;
     otherwise it is left unchanged.
-
-    TODO: Make sure that ``seed`` and ``profile`` are selected after stabilization!
-    We wouldn't want them to be caused by a degenerate specialization!
     """
     context = multiprocessing.get_context()
-    pool = context.Pool(processes=1)
+    first_prime = random_prime(2**26 - 1, proof=True, lbound=2**23)
 
-    try:
-        # Run serially inside the timeout process. This prevents the process
-        # being terminated while it owns a nested multiprocessing pool.
-        # Profiling only applies at r=2. The worker runs in a separate process,
-        # so its profile is returned (pickled) in the result dict rather than
-        # modified in place.
-        pending = pool.apply_async(
-            _probe_reduction_order_helper,
-            (a, f, 2, ensure_termination, None, ProfileData(), 1),
-        )
-
-        result_r2 = pending.get(timeout=30.0)
-
-    except multiprocessing.TimeoutError:
-        verbose(
-            "    Probe at reduction order 2 exceeded 30 seconds; "
-            "selecting reduction order 1.",
-            level=1,
-        )
-        result_r2 = None
-
-    finally:
-        # On timeout this stops the running computation. On success it
-        # removes the now-idle worker. terminate() works on POSIX and Windows.
-        pool.terminate()
-        pool.join()
-
-    # r=2 completed. Probe r=1 with the same prime
-    result_r1 = _probe_reduction_order_helper(
-        a,
-        f,
-        1,
-        ensure_termination = ensure_termination,
-        first_prime=(
-            result_r2["prime"]
-            if result_r2 is not None
-            else None
-        ),
-        ncpus=1,
-    )
+    # Separate pools let us stop r=2 without cancelling the ongoing r=1 job.
+    # The OS can schedule the two single-process workers on different cores.
+    with context.Pool(processes=1) as pool_r1:
+        with context.Pool(processes=1) as pool_r2:
+            pending_r2 = pool_r2.apply_async(
+                _probe_reduction_order_worker,
+                (a, f, 2, ensure_termination, first_prime, ProfileData(), 1),
+            )
+            pending_r1 = pool_r1.apply_async(
+                _probe_reduction_order_worker,
+                (a, f, 1, ensure_termination, first_prime, None, 1),
+            )
+            try:
+                result_r2 = _probe_worker_result(pending_r2, timeout=30.0)
+            except multiprocessing.TimeoutError:
+                verbose(
+                    "    Probe at reduction order 2 exceeded 30 seconds; "
+                    "selecting reduction order 1.",
+                    level=1,
+                )
+                result_r2 = None
+        # Leaving the inner context terminates/joins r=2, even on timeout.
+        # r=1 has been running throughout and remains alive in its own pool.
+        result_r1 = _probe_worker_result(pending_r1)
 
     usable = [
         result
@@ -343,6 +327,28 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
         profile.copy_from(choice["profile"])
 
     return choice["r"], seed
+
+# ~~ BOILERPLATE ~~
+def _probe_reduction_order_worker(*args):
+    """Transport errors whose constructors require more than Exception.args."""
+    try:
+        return True, _probe_reduction_order_helper(*args)
+    except Exception as exc:
+        return False, (type(exc), exc.args, exc.__dict__, traceback.format_exc())
+
+
+def _probe_worker_result(pending, timeout=None):
+    """Unpack a worker result while preserving typed errors and their fields."""
+    success, result = pending.get(timeout=timeout)
+    if success:
+        return result
+    error_type, args, attributes, worker_traceback = result
+    error = error_type.__new__(error_type, *args)
+    BaseException.__init__(error, *args)
+    error.__dict__.update(attributes)
+    error.add_note("Reduction-order probe worker traceback:\n" + worker_traceback)
+    raise error
+
 
 def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None, profile=None, ncpus=1):
     r"""Compute one modular probe and its comparison score."""
@@ -400,4 +406,5 @@ def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None,
                 return None
 
             raise
+
 
