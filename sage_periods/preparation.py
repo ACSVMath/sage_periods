@@ -8,6 +8,10 @@ from .profiling import ProfileData
 
 from sage.misc.verbose import verbose
 import multiprocessing
+import pickle
+import tempfile
+import time
+import traceback
 
 def compute_homogenization(R, k=None, t = None, homog_var = None):
     r"""
@@ -259,145 +263,148 @@ def minimize_denominator_degree(R, xgens, rounds=3, concurrent=10, time_cap=30.0
     verbose(f"minimize_denom_deg: denominator degree reduced from {start} to {cur}.", level=1)
     return pool[0] / prodx
 
-# NOTE: This function assumes that, generically, a call with r=1 will be faster than a call with r=2.
-# We should see how reasonable this assumption is.
-def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
-    r"""
-    Probe r=2 for at most 30 seconds, followed by r=1 if r=2
-    completes. Return ``(reduction_order, seed)``,
-    where ``reduction_order`` is optimal choice of ``r`` and
-    ``seed`` is a dict ``{prime: coeffs}`` for an operator modulo one prime.
-    If ``r = 2`` is chosen, the ``ProfileData`` object ``profile`` (if given)
-    is overwritten in place with the profile gathered by the ``r = 2`` probe;
-    otherwise it is left unchanged.
-
-    TODO: Make sure that ``seed`` and ``profile`` are selected after stabilization!
-    We wouldn't want them to be caused by a degenerate specialization!
-    """
-    context = multiprocessing.get_context()
-    pool = context.Pool(processes=1)
-
-    try:
-        # Run serially inside the timeout process. This prevents the process
-        # being terminated while it owns a nested multiprocessing pool.
-        # Profiling only applies at r=2. The worker runs in a separate process,
-        # so its profile is returned (pickled) in the result dict rather than
-        # modified in place.
-        pending = pool.apply_async(
-            _probe_reduction_order_helper,
-            (a, f, 2, ensure_termination, None, ProfileData(), 1),
-        )
-
-        result_r2 = pending.get(timeout=30.0)
-
-    except multiprocessing.TimeoutError:
-        verbose(
-            "    Probe at reduction order 2 exceeded 30 seconds; "
-            "selecting reduction order 1.",
-            level=1,
-        )
-        result_r2 = None
-
-    finally:
-        # On timeout this stops the running computation. On success it
-        # removes the now-idle worker. terminate() works on POSIX and Windows.
-        pool.terminate()
-        pool.join()
-
-    # r=2 completed. Probe r=1 with the same prime
-    result_r1 = _probe_reduction_order_helper(
-        a,
-        f,
-        1,
-        ensure_termination = ensure_termination,
-        first_prime=(
-            result_r2["prime"]
-            if result_r2 is not None
-            else None
-        ),
-        ncpus=1,
-    )
-
-    usable = [
-        result
-        for result in (result_r2, result_r1)
-        if result is not None
-    ]
-
-    if not usable:
-        # Both r=1 and r=2 were bad; start main loop at r=3, with no seed data
-        # (and a disabled profile, since profiling applies only at r=2).
-        return 3, {}
-
-    choice = min(usable, key=lambda result: result["score"])
-
-    seed = (
-        {choice["prime"]: choice["coeffs"]}
-        if choice["coeffs"] is not None
-        else {}
-    )
-
-    # Adopt the r=2 profile only if r=2 is chosen; otherwise leave it disabled.
-    # (ProfileData uses slots, so we copy fields explicitly rather than via __dict__.)
-    if profile is not None and choice["r"] == 2:
-        profile.copy_from(choice["profile"])
-
-    return choice["r"], seed
-
-def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None, profile=None, ncpus=1):
-    r"""Compute one modular probe and its comparison score."""
-    p = first_prime
-
+def _probe_reduction_order_helper(a, f, r, ensure_termination, max_basis=None):
+    """Return (modular result, basis size, profile) for one reduction order."""
+    profile = ProfileData() if r == 2 else None
     for attempt in range(5):
-        if p is None:
-            p = random_prime(2**26 - 1,proof=True,lbound=2**23,)
-
+        p = random_prime(2**26 - 1, proof=True, lbound=2**23)
         try:
-            # NOTE: Modifies profile in place
-            rho0, M, B = compute_gauss_manin_connection(a,f,r,p,profile=profile) # Future: Add argument ncpus=ncpus (passed in from caller)
-            
+            rho0, M, B = compute_gauss_manin_connection(
+                a, f, r, p, profile=profile, max_basis=max_basis)
             if len(M) == 0 or rho0.nrows() == 0:
-                # The reduced class vanishes: the operator is 1.
-                coeffs = None
-                score = (0, -1, 0, len(M), r)
+                result = (0, p, None)
             else:
-                coeffs = compute_reductions_dependency(rho0, B,ensure_termination)
-                degrees = [
-                    -1 if c == 0 else int(c.degree())
-                    for c in coeffs
-                ]
+                coeffs = compute_reductions_dependency(rho0, B, ensure_termination)
+                result = (len(coeffs) - 1, p, coeffs)
+            return result, len(M), profile
+        except (ReductionOrderTooSmallError, ProbeBasisCapExceededError):
+            return (None, None, None), None, None
+        except BadPrimeError:
+            if profile is not None:
+                profile.reset()
+            if attempt == 4:
+                raise
 
-                score = (
-                    len(coeffs) - 1,                        # operator order
-                    max(degrees),                           # maximum t-degree
-                    sum(d + 1 for d in degrees if d >= 0),  # dense coefficient size
-                    len(M),                                 # Stage-1 basis size
-                    r,                                      # prefer r=1 on exact ties
-                )
 
-            verbose(
-                f"    Probe at reduction order {r}: "
-                f"operator order {score[0]}, degree {score[1]}, "
-                f"basis size {len(M)}.",
-                level=1,
-            )
+def _probe_worker(a, f, ensure_termination, result_path):
+    """Write one complete result; no pipe/queue can block worker shutdown."""
+    try:
+        payload = (True, _probe_reduction_order_helper(a, f, 2, ensure_termination))
+    except Exception as exc:
+        # Our typed errors require more constructor arguments than exc.args.
+        # Transport their state explicitly rather than pickling the exception.
+        payload = (False, (type(exc), exc.args, exc.__dict__, traceback.format_exc()))
+    with open(result_path, "wb") as stream:
+        pickle.dump(payload, stream, protocol=pickle.HIGHEST_PROTOCOL)
 
-            return {"r": r, "prime": p, "coeffs": coeffs, "score": score,
-                    "profile": profile}
 
-        except Exception as exc:
+def _timed_probe_reduction_order(a, f, ensure_termination, timeout=30.0):
+    """Run r=2 under a single deadline, including retries and result writing.
 
-            if isinstance(exc,BadPrimeError) and attempt < 4:
-                p = None
-                continue
+    Return None on timeout. Cleanup may add at most two half-second joins;
+    unexpected worker failures are errors, not timeouts or bad primes.
+    """
+    # Fork preserves the already-initialized Sage environment on Unix. Other
+    # platforms use their default start method and must support Sage pickling.
+    # !! NOTE: Add warning about this to compatibility in documentation!
 
-            if isinstance(exc,ReductionOrderTooSmallError):
-                verbose(
-                    f"    Probe at reduction order {r} was unusable: "
-                    f"{exc}.",
-                    level=1,
-                )
+    # ~~ BOILERPLATE ~~
+    method = "fork" if "fork" in multiprocessing.get_all_start_methods() else None
+    context = multiprocessing.get_context(method)
+    with tempfile.TemporaryDirectory(prefix="sage-periods-probe-") as directory:
+        result_path = directory + "/result.pkl"
+        worker = context.Process(target=_probe_worker, args=(a, f, ensure_termination, result_path))
+        deadline = time.monotonic() + timeout
+        try:
+            worker.start()
+            worker.join(max(0.0, deadline - time.monotonic()))
+            if worker.is_alive():
                 return None
+            if worker.exitcode != 0:
+                raise RuntimeError(f"Reduction-order probe worker exited with code {worker.exitcode}.")
+            with open(result_path, "rb") as stream:
+                success, payload = pickle.load(stream)
+            if success:
+                return payload
+            error_type, args, attributes, worker_traceback = payload
+            error = error_type.__new__(error_type, *args)
+            BaseException.__init__(error, *args)
+            error.__dict__.update(attributes)
+            error.add_note("Reduction-order probe worker traceback:\n" + worker_traceback)
+            raise error
+        finally:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(0.5)
+                if worker.is_alive():
+                    worker.kill()
+                    worker.join(0.5)
+                if worker.is_alive():
+                    raise RuntimeError("Could not stop the reduction-order probe worker.")
+            worker.close()
 
-            raise
 
+def probe_reduction_order(a, f, ensure_termination=False, max_probe_order=2,
+                          ncpus=None, probe_timeout=30.0):
+    r"""
+    Probe r=2 in a timed worker, then r=1 with a basis cap, then higher orders
+    up to ``max_probe_order``. Return ``(r, seed, profile)``.
+
+    Each successful probe stores ``(operator_order, prime, coeffs)``. Select
+    the smallest operator order, breaking ties in favour of the smaller r.
+    An operator of order <= 1 triggers an early exit, as a selection heuristic.
+    If no probe is usable, start the main loop at ``max_probe_order + 1``.
+
+    ``probe_timeout`` is one deadline for the entire r=2 probe, including
+    Stage 1, Stage 2 and all bad-prime retries. On timeout its partial data
+    is discarded and r=1 is tried without a cap. On success, r=1 is capped
+    at ``3*max(1, size_at_r2) + 8``. Other orders and the main computation
+    have no wall-clock timeout. Worker cleanup can briefly extend the wait.
+
+    ``seed`` is ``{prime: coeffs}``, or empty for a vanishing reduced class
+    or when no probe succeeds. ``profile`` is a ``ProfileData`` object only
+    when r=2 is selected; otherwise it is ``None``. Bad primes are retried
+    up to five attempts, clearing any profile from the discarded attempt.
+    Unexpected errors propagate, including errors raised inside the worker.
+
+    ``ensure_termination`` selects the exact Stage-2 rank calculation.
+    ``ncpus`` is retained for API compatibility; probes run sequentially.
+    """
+
+    results = {}
+    profiles = {}
+    basis_sizes = {}
+    probe_orders = (list(range(min(2, max_probe_order), 0, -1))
+                    + list(range(3, max_probe_order + 1)))
+    
+    for r in probe_orders:
+        cap = None
+        if r == 1 and 2 in basis_sizes:
+            cap = 3 * max(1, basis_sizes[2]) + 8 # TODO: Find better heuristic than this?
+        if r == 2:
+            outcome = _timed_probe_reduction_order(a, f, ensure_termination, probe_timeout)
+            if outcome is None:
+                verbose(f"    Probe at reduction order 2 exceeded {probe_timeout:g} seconds; "
+                        "trying reduction order 1.", level=1)
+                results[r] = (None, None, None)
+                continue
+        else:
+            outcome = _probe_reduction_order_helper(a, f, r, ensure_termination, cap)
+        results[r], basis_size, profile = outcome
+        if basis_size is not None:
+            basis_sizes[r] = basis_size
+        if profile is not None:
+            profiles[r] = profile
+
+        order = results[r][0]
+        verbose(f"    Probe at reduction order {r}: modular operator order {order}.", level=1)
+        if order is not None and order <= 1:
+            break
+
+    usable = [(result[0], r) for r, result in results.items() if result[0] is not None]
+    if not usable:
+        return max_probe_order + 1, {}, None
+    _, choice = min(usable)
+    _, p, coeffs = results[choice]
+    seed = {p: coeffs} if coeffs is not None else {}
+    return choice, seed, profiles.get(choice)

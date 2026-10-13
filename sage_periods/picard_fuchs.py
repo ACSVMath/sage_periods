@@ -298,21 +298,18 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
 
     verbose("Starting to compute Picard-Fuchs operator using evaluation-interpolation.",level=1)
 
-    # Choose the reduction order.  If the user passed r=1, start there.
-    # If none passed, probe r = 1 and r = 2 modulo one prime
-    # and start at whichever produces the operator of smaller order, 
-    # if both execution times are under 30 seconds.
-    # Else, pick whichever one is faster.
+    # Respect an explicit order; otherwise use serial, basis-capped probing.
     seed = {}
-    profile = ProfileData()
+    profile = None
     if reduction_order is None:
-        verbose("Choosing the reduction order by probing modulo one prime.",level=1)
-        # NOTE: This function modifies profile in place
-        r, seed = probe_reduction_order(a, f,ensure_termination, profile=profile) # Future: add , "ncpus=ncpus", passed in from caller.
+        verbose("Choosing the reduction order by modular probing.",level=1)
+        r, seed, profile = probe_reduction_order(a, f, ensure_termination, ncpus=ncpus)
         verbose(f"Auto-probe selected reduction order r = {r}.",level=1)
     else:
         r = Integer(reduction_order)
         assert r >= 1, "reduction_order must be a positive integer."
+    if r == 2 and profile is None:
+        profile = ProfileData()
 
     # Run a modular algorithm to compute L mod p. If no relations are found, r will be increased.
     # If the denominator of R defines a smooth variety, the algorithm is guaranteed to terminate with r=1. In general the algorithm
@@ -409,7 +406,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 # (whether or not the lift succeeds). If the prime that produced our
                 # profile was discarded, the profile may be degenerate too: reset it,
                 # so that it is re-recorded at the next prime.
-                if profile.prof_prime is not None and profile.prof_prime in bad_primes:
+                if profile is not None and profile.prof_prime is not None and profile.prof_prime in bad_primes:
                     verbose(f"Profile prime {profile.prof_prime} was discarded; resetting profile.",level=1)
                     profile.reset()
 
@@ -434,7 +431,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
         except ReductionOrderTooSmallError as e:
             r += 1
             # Reset profile and seeded operator because they belong to the previous r.
-            profile.reset()
+            profile = ProfileData() if r == 2 else None
             seed = {}
             continue
 
