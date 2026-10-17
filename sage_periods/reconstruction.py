@@ -22,6 +22,8 @@ from collections import Counter # For Stage 3
 
 from sage.misc.verbose import verbose, set_verbose
 
+from .errors import BadPrimeError, NeedMorePrimesError
+
 # For slots in ReconstructionData class
 from dataclasses import dataclass, field
 
@@ -420,8 +422,11 @@ def recon_add_rat(H,val,point,xkey):
         # Now, cand is a sequence of same length as L, containing our reconstruction attempt
         if max((p.degree() for p in cand), default=ZZ(-1)) > QQ(2) * len(points) / 3:
             # Bad luck: the sampling is not good
-            # This happens so rarely that we just throw away everything
+            # This happens so rarely that we just throw away everything.
+            # Also drop the hint, so that we fall back to the triangular
+            # schedule instead of retrying at the same too-small count forever.
             H.reset()
+            H.first_tick = None
             return 
 
         # Otherwise, we have a good reconstruction candidate
@@ -433,3 +438,164 @@ def recon_add_rat(H,val,point,xkey):
 
     H.recons[key] = recon
     return
+
+
+##### Incremental CRT lifting across primes (Stage 3) #####
+
+class CRTLifter:
+    r"""
+    Incremental Chinese-remainder accumulator for Stage 3.
+
+    Residue vectors over $GF(p)$ (one list of integers per prime) are folded in as they arrive:
+    each fold costs a single CRT step per entry, and each lift attempt is one rational
+    reconstruction pass over the accumulated integers. Vectors are keyed by a hashable
+    ``shape`` (e.g. a degree pattern), and only primes with identical shapes are combined.
+    A prime with a degenerate shape accumulates in a minority class: it never corrupts
+    the majority, and it is kept (not discarded), in case its class later becomes the majority.
+
+    This is an internal class for sage_periods, and is not meant to be used by the user.
+
+    EXAMPLES:
+
+    A wrong-shape prime folded first does not affect the majority lift.
+
+            sage: from sage_periods.reconstruction import CRTLifter
+            sage: L = CRTLifter()
+            sage: L.fold(5, [1, 2], ("bad",))
+            sage: for p in [7, 11, 13]:
+            ....:     L.fold(p, [ZZ(1/2 % p), ZZ(-1/3 % p), 1], ("good",))
+            sage: L.lift_majority()
+            (('good',), [1/2, -1/3, 1], frozenset({7, 11, 13}))
+            sage: L.class_of(5), L.class_of(7), L.class_of(3)
+            (('bad',), ('good',), None)
+    """
+
+    def __init__(self):
+        r"""Create an empty accumulator."""
+        self.classes = {}   # shape -> {"modulus", "residues", "primes"}
+        self.shape_of = {}  # prime -> shape of the class it was folded into
+
+    def fold(self, p, residues, shape):
+        r"""
+        Fold the residues ``residues`` (integers modulo ``p``) into the class ``shape``.
+        Folding a prime twice has no effect.
+        """
+        p = ZZ(p)
+        if p in self.shape_of:
+            return
+        self.shape_of[p] = shape
+        c = self.classes.get(shape)
+        if c is None:
+            self.classes[shape] = {
+                "modulus": p,
+                "residues": [ZZ(a) % p for a in residues],
+                "primes": {p},
+            }
+            return
+        M = c["modulus"]
+        Minv = M.inverse_mod(p)
+        # x' = x + M * ((a - x) * M^{-1} mod p) is the unique lift with
+        # x' = x mod M and x' = a mod p, 0 <= x' < M p.
+        c["residues"] = [x + M * (((ZZ(a) - x) * Minv) % p)
+                         for x, a in zip(c["residues"], residues)]
+        c["modulus"] = M * p
+        c["primes"].add(p)
+
+    def _majority(self):
+        r"""Return ``(shape, class)`` for the class with the most primes (first-inserted on ties)."""
+        return max(self.classes.items(), key=lambda kv: len(kv[1]["primes"]))
+
+    def lift_majority(self):
+        r"""
+        Rationally reconstruct the class with the most primes.
+
+        OUTPUT:
+
+        * ``(shape, values, primes)`` with ``values`` a list of rationals and ``primes``
+          the frozenset of primes in that class. Raises ``NeedMorePrimesError`` if no prime
+          has been folded yet or if rational reconstruction fails for some entry.
+        """
+        if not self.classes:
+            raise NeedMorePrimesError("No accumulated primes. Need more primes...")
+        shape, c = self._majority()
+        M = c["modulus"]
+        out = []
+        for x in c["residues"]:
+            try:
+                out.append(QQ(rational_reconstruction(x, M)))
+            except (ValueError, ArithmeticError):
+                raise NeedMorePrimesError(
+                    "Rational reconstruction failed for some coefficient. Need more primes..."
+                )
+        return shape, out, frozenset(c["primes"])
+
+    def class_of(self, p):
+        r"""Return the shape of the class that ``p`` was folded into, or ``None``."""
+        return self.shape_of.get(ZZ(p))
+
+    def majority_primes(self):
+        r"""Return the frozenset of primes in the majority class (empty if nothing was folded)."""
+        if not self.classes:
+            return frozenset()
+        return frozenset(self._majority()[1]["primes"])
+
+
+##### Operator codec: residue vectors for CRTLifter #####
+
+def operator_residues(coeffs):
+    r"""
+    Canonical residue vector of a modular operator, given as the Stage 2 coefficient list in $GF(p)[t]$.
+
+    The list is scaled so that the leading polynomial is monic in $t$, then flattened densely by degree.
+    Returns ``(shape, ints)`` with ``shape = (length, degree tuple)``. Raises ``BadPrimeError``
+    if the list is empty or its leading polynomial is zero.
+
+    This is an internal function for sage_periods, and is not meant to be called by the user.
+
+    EXAMPLES:
+
+            sage: from sage_periods.reconstruction import operator_residues
+            sage: R7 = PolynomialRing(GF(7), "t"); t7 = R7.gen()
+            sage: operator_residues([3*t7 + 1, 2*t7**2 + 4])
+            ((2, (1, 2)), [4, 5, 2, 0, 1])
+    """
+    if not coeffs or coeffs[-1] == 0:
+        prime = coeffs[-1].parent().characteristic() if coeffs else None
+        raise BadPrimeError("Degenerate modular operator (empty or zero leading coefficient).", prime, "lifting")
+    lc = coeffs[-1].leading_coefficient()
+    scaled = [c / lc for c in coeffs]
+    shape = (len(scaled), tuple(c.degree() for c in scaled))
+    ints = []
+    for c in scaled:
+        ints.extend(ZZ(c[k]) for k in range(c.degree() + 1))
+    return shape, ints
+
+
+def operator_from_lift(t, shape, values):
+    r"""
+    Rebuild the $\mathbb{Q}[t]$ coefficient list from ``operator_residues`` data
+    (``shape``, and the lifted rational ``values``).
+
+    EXAMPLES:
+
+            sage: from sage_periods.reconstruction import operator_from_lift
+            sage: operator_from_lift("t", (3, (1, -1, 0)), [1/2, 1/3, 1])
+            [1/3*t + 1/2, 0, 1]
+    """
+    RQQ = PolynomialRing(QQ, str(t))
+    _, degs = shape
+    out = []
+    pos = 0
+    for d in degs:
+        if d < 0:
+            out.append(RQQ.zero())
+        else:
+            out.append(RQQ(values[pos:pos + d + 1]))
+            pos += d + 1
+    return out
+
+
+def operator_residue_count(shape):
+    r"""Number of residues described by an ``operator_residues`` shape."""
+    _, degs = shape
+    return sum(d + 1 for d in degs if d >= 0)

@@ -6,11 +6,12 @@ Main functions to compute annihilating D-finite operators for diagonals and peri
 from sage.all import *
 
 # Imports from our modules
-# from .reconstruction import ReconstructionData, compute_reductions_dependency, lift_operator_across_primes, recon_add_rat
+# from .reconstruction import ReconstructionData, compute_reductions_dependency, recon_add_rat
 # from .rham_koszul import RhamKoszulData, gauss_manin_helper
 from .diagonal import minimize_diagonal_annihilator, diagonal_to_period, normalize_diagonal_arguments
 from .preparation import compute_homogenization, compute_prepared_fraction, minimize_denominator_degree, probe_reduction_order
-from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, lift_operator_across_primes
+from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency
+from .reconstruction import CRTLifter, operator_residues, operator_from_lift
 from .errors import *
 from .profiling import ProfileData
 
@@ -322,12 +323,19 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
         verbose("    r: " + str(r),level=1)
         try:
             ### Run the modular algorithm, with fixed r ###
-            # Hold coefficients for our Picard-Fuchs operator over F_p(t) in a dictionary keyed by p.
+            # Incremental CRT accumulator for the modular operators, keyed by operator shape
+            # (so degenerate primes sit in minority classes instead of being discarded).
             # Start from the probe's operator (if any): it was computed at this same r,
-            # so it is a valid pre-evaluated modular operator, and its prime can then be
-            # checked (and discarded, along with any profile it produced) in Stage 3.
-            degree_hint = None  # Relearn when the reduction order changes.
-            Lp_coeffs_dict = dict(seed)
+            # so is valid.
+            degree_hint = None  # Relearn when reduction order changes.
+            lifter = CRTLifter()
+            Lp_coeffs_dict = set(seed)
+            for sp, sc in seed.items():
+                try:
+                    sshape, sints = operator_residues(sc)
+                except BadPrimeError:
+                    continue
+                lifter.fold(sp, sints, sshape)
             # Store primes p which can't be used in CRT lifting
             bad_primes = [] 
             primectr = 0
@@ -372,8 +380,15 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 
                 if degree_hint is None:
                     # Scheduling estimate only; later primes still require stability.
-                    degree_hint = max((c.numerator().degree() + c.denominator().degree()
-                                       for c in rho0.list() + B.list() if c), default=0) + 3
+                    # The hint must also pass recon_add_rat's numerator check
+                    # deg(den*entry) <= 2/3 * #points, where den is the common denominator.
+                    entries = [c for c in rho0.list() + B.list() if c]
+                    degsum = max((c.numerator().degree() + c.denominator().degree()
+                                  for c in entries), default=0)
+                    den = lcm([c.denominator() for c in entries]) if entries else 1
+                    maxnumdeg = max(((den*c).numerator().degree() for c in entries), default=0)
+                    degree_hint = max(degsum + 3, floor(QQ(3)/2*maxnumdeg) + 2)
+                    # TODO: Better heuristic? Though this is pretty good, as it learns from first prime.
 
                 # If we get a trivial basis, then we're done.
                 if len(M) == 0 or rho0.nrows() == 0:
@@ -391,30 +406,35 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                     bad_primes.append(p)
                     continue
                 
-                Lp_coeffs_dict[p] = Lp_coeffs_denoms_cleared
+                Lp_coeffs_dict.add(p)
                 
                 # At this point, we have a list of coeffs for our forms rho[i], evaluated in F_p(t), constituting an operator L_p over F_p(t)
                 ###############################################################################################################
-                # STAGE 3:  Use Chinese remainder theorem to lift these coeffs a_i to QQ(t).
-                # The list of operators L_p is encoded by Lp_coeffs_dict.
-                # Assumes we cleared denominators across lists at end of Stage 2 so that Lp_coeffs_dict contains polynomials.
+                # STAGE 3:  Fold L_p into the incremental CRT accumulator, then try to lift the majority class to QQ(t).
+                # Assumes we cleared denominators at end of Stage 2 so that L_p has polynomial coefficients.
                 ###############################################################################################################
                 verbose(f"Found an equation of order {len(Lp_coeffs_denoms_cleared)-1} and degree {max([p.numerator().degree() for p in Lp_coeffs_denoms_cleared])}.",level=1)
                 try:
-                    L_coeffs = lift_operator_across_primes(t,Lp_coeffs_dict,bad_primes)
+                    shape, ints = operator_residues(Lp_coeffs_denoms_cleared)
+                except BadPrimeError:
+                    bad_primes.append(p)
+                    continue
+                lifter.fold(p, ints, shape)
+                try:
+                    majority_shape, values, _ = lifter.lift_majority()
+                    L_coeffs = operator_from_lift(t, majority_shape, values)
                 except NeedMorePrimesError:
                     L_coeffs = None
 
-                # lift_operator_across_primes appends degenerate primes to bad_primes
-                # (whether or not the lift succeeds). If the prime that produced our
-                # profile was discarded, the profile may be degenerate too: reset it,
+                # If the prime that produced our profile is not in the majority shape class
+                # (or was never folded), the profile may be degenerate too: reset it,
                 # so that it is re-recorded at the next prime.
-                if profile.prof_prime is not None and profile.prof_prime in bad_primes:
-                    verbose(f"Profile prime {profile.prof_prime} was discarded; resetting profile.",level=1)
+                if profile.prof_prime is not None and profile.prof_prime not in lifter.majority_primes():
+                    verbose(f"Profile prime {profile.prof_prime} is not in the majority class; resetting profile.",level=1)
                     profile.reset()
 
                 if L_coeffs is None:
-                    # Either we pruned out too many primes in CRT, or we don't have enough to rationally reconstruct. Add more.
+                    # Not enough primes in the majority class to rationally reconstruct. Add more.
                     verbose("Rational reconstruction failed to lift one or more of our coefficients. Need more primes.",level=1)
                     continue
 
