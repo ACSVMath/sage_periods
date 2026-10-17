@@ -86,11 +86,12 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
 
     # Build the coefficient matrix and take RREF; this gives an echelonized
     # basis in coordinates.  Over GF(p) this uses fast native linear algebra.
-    entries = {}
+    # Fill a zero dense matrix entry by entry: much faster than passing a dict
+    # to the Matrix constructor.
+    mat = Matrix(A.base_ring(), len(L), len(exps), sparse=False)
     for i, p in enumerate(L):
         for e, c in p.dict().items():
-            entries[(i, index[e])] = c
-    mat = Matrix(A.base_ring(), len(L), len(exps), entries, sparse=False)
+            mat[i, index[e]] = c
 
     # If requested, record which input rows form a basis of the row space
     # (this must be read off before echelonizing, which mutates the matrix).
@@ -102,14 +103,19 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
         rows = [row for row in mat.rows() if not row.is_zero()]
         return (Matrix(rows), piv) if return_pivot_rows else Matrix(rows)
 
-    # Convert the nonzero rows back to polynomials.  RREF places zero rows
-    # last, so we may stop at the first one.
+    # Convert the nonzero rows back to polynomials.  A single call to
+    # nonzero_positions() returns (row, col) pairs sorted by row, so we group
+    # them by row instead of extracting each row vector separately.
     out = []
-    for row in mat.rows():
-        nz = row.nonzero_positions()
-        if not nz:
-            break
-        out.append(A({exps[j]: row[j] for j in nz}))
+    cur_row, cur_dict = None, None
+    for i, j in mat.nonzero_positions(copy=False):
+        if i != cur_row:
+            if cur_dict is not None:
+                out.append(A(cur_dict))
+            cur_row, cur_dict = i, {}
+        cur_dict[exps[j]] = mat[i, j]
+    if cur_dict is not None:
+        out.append(A(cur_dict))
     return (out, piv) if return_pivot_rows else out
     
 
