@@ -861,6 +861,7 @@ def gauss_manin_helper(U, der, L, ret=None):
     #     return engine_gauss_manin_helper(U, der, L, ret=ret)
 
     basis = []
+    basis_set = set()
     gm = []
 
     # Reduce the initial generators and extract the monomials supporting them.
@@ -874,6 +875,7 @@ def gauss_manin_helper(U, der, L, ret=None):
         # Add the current frontier of monomials to the basis.
         xmons = sorted(xmons)
         basis.extend(xmons)
+        basis_set.update(xmons)
         verbose("xmons:",level=1)
         verbose(xmons,level=1)
         verbose("basis:",level=1)
@@ -891,34 +893,30 @@ def gauss_manin_helper(U, der, L, ret=None):
 
         # If the reduced images exceed the expected degree bound, then r was too
         # small for the higher reduction to have stabilised.
-        if max(p.degree() for p in gm) > (U.dim - 1) * U.deg:
+        if max(p.degree() for p in nf) > (U.dim - 1) * U.deg:
             raise ReductionOrderTooSmallError("Degree condition met! Raise r",U.r)
 
         # Continue with the newly discovered monomials, exactly as in the monomial
         # closure construction of M in Algorithm 4 of Lairez 2016.
         newmons = set().union(*(set(p.monomials()) for p in nf))
-        xmons = list(newmons.difference(set(basis)))
+        xmons = list(newmons.difference(basis_set))
         verbose("xmons after subtracting against basis:",level=1)
         verbose(xmons,level=1)
 
     ret = RKGaussManinData() if ret is None else ret
     ret.basis = basis
 
-    # Convert the reduced images to the matrix of the action in the monomial basis.
-    ret.gm = matrix(
-        U.ring.base_ring(),
-        len(basis),
-        len(basis),
-        [[gm[j].monomial_coefficient(basis[i]) for j in range(len(basis))] for i in range(len(basis))],
-    )
+    # Each image is a column; fill only its nonzero coefficients.
+    index = {m.exponents()[0]: i for i, m in enumerate(basis)}
+    def coefficient_matrix(images):
+        out = matrix(U.ring.base_ring(), len(basis), len(images), sparse=False)
+        for j, image in enumerate(images):
+            for e, c in image.dict().items():
+                out[index[e], j] = c
+        return out
 
-    # Likewise, express the starting generators in that same basis.
-    ret.proj = matrix(
-        U.ring.base_ring(),
-        len(basis),
-        len(L),
-        [[proj[j].monomial_coefficient(basis[i]) for j in range(len(L))] for i in range(len(basis))],
-    )
+    ret.gm = coefficient_matrix(gm)
+    ret.proj = coefficient_matrix(proj)
 
     ret.ebasis = tuple(tuple(m.exponents(False)) for m in basis)
     return ret
