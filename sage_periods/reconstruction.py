@@ -2,25 +2,13 @@ r"""
 Methods for doing evaluation-interpolation, rational reconstruction, and the Chinese remainder theorem.
 """
 
-from sage.arith.misc import CRT_list
-from sage.rings.finite_rings.integer_mod_ring import Integers
-from sage.matrix.constructor import Matrix
 from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
 from sage.rings.rational_field import QQ
-from sage.structure.sequence import Sequence
 from sage.rings.integer_ring import ZZ
-from sage.arith.misc import crt
 from sage.arith.misc import gcd
-from sage.arith.functions import lcm
 from sage.matrix.constructor import matrix
 from sage.structure.element import parent
 from sage.misc.misc_c import prod
-from sage.arith.misc import rational_reconstruction
-from sage.modules.free_module_element import vector
-
-from collections import Counter # For Stage 3
-
-from sage.misc.verbose import verbose, set_verbose
 
 from .errors import BadPrimeError, NeedMorePrimesError
 
@@ -57,7 +45,8 @@ def cauchy_interp_rational_fn(K, pairs, criterion="total_degree"):
 
     * ``h`` -- An element of $GF(p)(t)$ such that $h(u_i) = v_i$ for all sample pairs,
       with $\deg(\mathrm{numer}) < k$ and $\deg(\mathrm{denom}) \leq \mathrm{len}(\mathrm{pairs})-k$ for some admissible $k$ if the reconstruction is solvable.
-      Raises ``ValueError`` if the Cor. 5.18 gcd test from von zur Gathen--Gerhard fails.
+      The gcd test from Cor. 5.18 excludes denominators vanishing at sample points.
+      Polynomial interpolation (denominator 1) always supplies an admissible candidate.
 
     ASSUMPTIONS: (not checked or handled gracefully)
 
@@ -114,22 +103,6 @@ def cauchy_interp_rational_fn(K, pairs, criterion="total_degree"):
     g = R.lagrange_polynomial(pts)
     m = prod((t - ui) for (ui, _) in pts)
 
-    # Return the leading coefficient, or 1 when input is zero.
-    def lu(h):
-        return h.leading_coefficient() if h != 0 else F.one()
-
-    # Return the monic associate, or 0 when input is zero.
-    def normal(h):
-        return h / lu(h) if h != 0 else R.zero()
-
-    # By remark below Cor 5.18 in vzG-G, to check that gcd(r_j,t_j) = 1 it suffices to
-    # check that gcd(m,t_j) = 1. There is a solution if and only if this holds. 
-    def admissible(den):
-        if den != 0 and gcd(den,m) == 1:
-            return True
-        else:
-            return False
-
     # Evaluate a given (numerator, denominator) pair based on input criterion.
     def score(num, den):
         dn = num.degree()
@@ -142,39 +115,21 @@ def cauchy_interp_rational_fn(K, pairs, criterion="total_degree"):
             return (dd, dn)
         raise ValueError("Unknown criterion")
 
-    # Extended Euclidean Algorithm (EEA) initialization (with monic remainders)
-    r0 = normal(m)
-    t0 = R.zero()
+    # Ordinary EEA suffices: scaling a remainder and its Bezout coefficient
+    # together does not change their quotient, degrees, or admissibility.
+    r0, r1 = m, g
+    t0, t1 = R.zero(), R.one()
+    best = (score(r1, t1), r1, t1)  # Polynomial interpolation is admissible.
 
-    r1 = normal(g)
-    t1 = R(lu(g)**(-1))   # So r1 = t1*g
-
-    best = None
-    if admissible(t1):
-        best = (score(r1, t1), r1, t1)
-
-    # We now run our EEA loop. Modifies things in-place, so
-    # r2 = r_{i+1}, r1 = ri, r0 = r_{i-1}
-    # t2 = t_{i+1}, t1 = ti, t0 = t_{i-1}.
-
-    # For scoring, we run through the entire EEA keeping track
-    # of the lowest-scored admissible pair that we encounter.
     while r1 != 0:
-        q, rem = r0.quo_rem(r1)
-        inv_rho = lu(rem)**(-1)
-        r2 = inv_rho * rem
-        t2 = inv_rho * (t0 - q * t1)
-
-        if admissible(t2):
-            cand = (score(r2, t2), r2, t2)
-            if best is None or cand[0] < best[0]:
-                best = cand
-
+        q, r2 = r0.quo_rem(r1)
+        t2 = t0 - q * t1
+        candidate_score = score(r2, t2)
+        # A gcd is only needed for candidates that can improve the score.
+        if candidate_score < best[0] and t2 != 0 and gcd(t2, m) == 1:
+            best = (candidate_score, r2, t2)
         r0, r1 = r1, r2
         t0, t1 = t1, t2
-
-    if best is None:
-        raise ValueError("No admissible Cauchy reconstruction found from these sample points.")
 
     _, num_best, den_best = best
 
@@ -330,8 +285,8 @@ def recon_add_rat(H,val,point,xkey):
     """
 
     # Flatten each matrix in val
-    L_rho0, shape_rho0 = Sequence(val[0].list()), val[0].dimensions()
-    L_B, shape_B = Sequence(val[1].list()), val[1].dimensions()
+    L_rho0, shape_rho0 = val[0].list(), val[0].dimensions()
+    L_B, shape_B = val[1].list(), val[1].dimensions()
 
     # Handle corner cases
     if len(L_rho0) == 0 and len(L_B) == 0:
@@ -392,23 +347,24 @@ def recon_add_rat(H,val,point,xkey):
         H.counter += 1
         H.nbticks = H.counter
 
-    # Get the points associated with these vals / tests
-    points = Sequence(v[1] for v in all_tests)
+    # Interpolation data live in GF(p), not in the larger fraction field.
+    # In particular, den(u) should be a field element, not a constant fraction.
+    points = [Kev(v[1]) for v in all_tests]
 
     # Reconstruct the random linear form as a rational function of the parameter
-    recon = cauchy_interp_rational_fn(K, zip([Kev(p) for p in points], [v[0] for v in all_tests]))
+    recon = cauchy_interp_rational_fn(K, zip(points, [v[0] for v in all_tests]))
 
     # Accept the reconstruction only after obtaining the same candidate twice
     if key in H.recons and H.recons[key] == recon:
         all_vals = H.vals[key]
-        cand = Sequence([])
+        cand = []
 
         # Reuse the denominator of the same random linear combination.
         den = recon.denominator()
 
         # Once the denominator is known, each numerator is just an ordinary interpolation problem.
         if den.is_constant():
-            evden = [den for p in points]
+            evden = [Kev(den[0])] * len(points)
         else:
             evden = [den(p) for p in points]
         
@@ -417,7 +373,7 @@ def recon_add_rat(H,val,point,xkey):
             Potential improvement: Cached batch reconstruction of the numerators? Or use one of the SOTA methods?
         '''
         for j in range(len(L)):
-            cand.append(Rt.lagrange_polynomial(list(zip(points, Sequence(evden[i] * all_vals[i][0][j] for i in range(len(points)))))))
+            cand.append(Rt.lagrange_polynomial([(u, evden[i] * all_vals[i][0][j]) for i, u in enumerate(points)]))
 
         # Now, cand is a sequence of same length as L, containing our reconstruction attempt
         if max((p.degree() for p in cand), default=ZZ(-1)) > QQ(2) * len(points) / 3:
@@ -431,8 +387,8 @@ def recon_add_rat(H,val,point,xkey):
 
         # Otherwise, we have a good reconstruction candidate
         # Rebuild our pair entries separately, then assign candidate
-        rho0_cand = Sequence(p / den for p in cand[:bkpt])
-        B_cand = Sequence(p / den for p in cand[bkpt:])
+        rho0_cand = [p / den for p in cand[:bkpt]]
+        B_cand = [p / den for p in cand[bkpt:]]
 
         H.candidate = ( matrix(rho0_cand[0].parent(), *shape_rho0, rho0_cand), matrix(B_cand[0].parent(), *shape_B, B_cand) )
 
@@ -522,7 +478,7 @@ class CRTLifter:
         out = []
         for x in c["residues"]:
             try:
-                out.append(QQ(rational_reconstruction(x, M)))
+                out.append(x.rational_reconstruction(M))
             except (ValueError, ArithmeticError):
                 raise NeedMorePrimesError(
                     "Rational reconstruction failed for some coefficient. Need more primes..."
