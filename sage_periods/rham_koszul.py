@@ -85,7 +85,8 @@ class RhamKoszulData:
     basis: object | None = None
     # Linearized engine
     eng: object | None = None
-    # Cache, which is read from when we do reduction order probe and passed to future points.
+    # For staircase caching   
+    filtered_quotients: dict = field(default_factory=dict)
     staircase_keys: object | None = None
 
     def __init__(self,f,r=1,profile=None,staircase_keys=None):
@@ -137,6 +138,7 @@ class RhamKoszulData:
         self.eng=None
         self.profile=profile
         self.staircase_keys=staircase_keys
+        self.filtered_quotients={}
         self.used_syzlms=set()
         self.wdown_liftlms={}
     
@@ -265,7 +267,7 @@ def _diff_stairs(a, B, vars, deg):
     var_exps = [v.exponents()[0] for v in vars]
 
     def _reducible(m):
-        return any(all(bi <= mi for bi, mi in zip(b, m)) for b in forbidden)
+        return any(b.divides(m) for b in forbidden)
 
     d0 = sum(a_exp)
     if deg < d0:
@@ -278,7 +280,7 @@ def _diff_stairs(a, B, vars, deg):
         for m in current:
             for ve in var_exps:
                 m2 = m.eadd(ve)
-                if not _reducible(m2):
+                if m2 not in nxt and not _reducible(m2):
                     nxt.add(m2)
         current = nxt
     return {ring.monomial(*e) for e in current}
@@ -324,10 +326,8 @@ def _syz_quotients(U, deg):
     # coefficients. These leading monomial patterns are the same at every
     # non-degenerate evaluation point and prime, so the enumerated quotient
     # exponents are cached across calls, keyed by the leading monomial data.
-    syzlm_exps = [tuple(s.lm().exponents()[0]) for s in U.syz]
-    key = (tuple(syzlm_exps),
-           tuple(tuple(b.exponents()[0]) for b in U.tsyzlm),
-           deg)
+    syzlm_exps = U.syzlm_exps
+    key = (syzlm_exps, U.tsyzlm_exps, deg)
     if U.staircase_keys is not None:
         U.staircase_keys.add(key)
     quotients = _staircase_cache.get(key)
@@ -369,22 +369,22 @@ def _basis_syzygies_with_lms(U, deg):
     called by the user.
     """
     ring = U.xring
-    quotients, syzlm_exps = _syz_quotients(U, deg)
+    # An armed profile is fixed for this fibre; cache only selected exponents,
+    # not coefficient-dependent syzygy polynomials.
+    selected = U.filtered_quotients.get(deg) if U.profile_active else None
+    if selected is None:
+        quotients, syzlm_exps = _syz_quotients(U, deg)
+        filt = U.profile.syzlms if U.profile_active else None
+        selected = []
+        for qe, i in quotients:
+            liftlm = tuple(q + s for q, s in zip(qe, syzlm_exps[i]))
+            if filt is None or liftlm in filt:
+                selected.append((qe, i, liftlm))
+        if U.profile_active:
+            U.filtered_quotients[deg] = selected
 
-    # When the profile is armed (and applies to this fibre), keep only the lifts
-    # whose leading monomial was recorded as contributing a pivot.
-    filt = U.profile.syzlms if U.profile_active else None
-
-    ret = []
-    liftlms = []
-    # NOTE (10-11): Here, wouldn't it be better to instead, if filt is active, generate only those syzygies that *are* in filt?
-    # Not generate all of the syzygies
-    for qe, i in quotients:
-        liftlm = tuple(q + s for q, s in zip(qe, syzlm_exps[i]))
-        if filt is not None and liftlm not in filt:
-            continue
-        ret.append(ring.monomial(*qe) * U.syz[i])
-        liftlms.append(liftlm)
+    ret = [ring.monomial(*qe) * U.syz[i] for qe, i, _ in selected]
+    liftlms = [lm for _, _, lm in selected]
     return ret, liftlms
 
 # Number of terms at which ``exterior_derivative`` switches from the term-by-term
