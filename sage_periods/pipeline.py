@@ -286,19 +286,21 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
 
         # At this point, we have our coefficient vector. We could return, but we should clear denominators first to make CRT possible.
 
-        # Extract denominators of y coefficients
+        # Clear denominators; return operator! (no need to discard primes now)
+        Rp = K.ring()
         denoms = [ai.denominator() for ai in y]
-        Rp = K.ring() # Rp = GF(p)[t] and each entry in denoms is already in Rp
-        # Take LCM of denoms
-        LCM = lcm(denoms) if denoms else Rp(1) # If our denoms list is empty then our LCM is 1
-        out = [LCM*y[i] for i in range(m)] + [LCM] # This could have entries in K or Rp
-        try:
-            out = [Rp(c) for c in out]
-        except Exception:
-            # TODO: Fix! This is the wrong type of error to raise, here. having a bad prime won't affect denominator clearing.
-            # Throwing away an entire prime is one way of fixing it, but is very wasteful.
-            raise BadPrimeError("Last line of compute_reductions_dependency", prime=F.characteristic(),stage="dependency")
-        return out
+        LCM = lcm(denoms) if denoms else Rp.one()
+        if not LCM:
+            raise ArithmeticError("Dependency denominator LCM unexpectedly vanished.")
+        out = []
+        for i, (ai, den) in enumerate(zip(y, denoms)):
+            quotient, remainder = LCM.quo_rem(den)
+            if remainder:
+                raise ArithmeticError(
+                    f"Dependency denominator {i} does not divide its LCM "
+                    f"in characteristic {F.characteristic()}.")
+            out.append(ai.numerator() * quotient)
+        return out + [LCM]
 
 # Stage 3
 
