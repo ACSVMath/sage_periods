@@ -279,6 +279,9 @@ def recon_add_rat(H,val,point,xkey):
             sage: H.candidate
             None
             sage: recon_add_rat(H, (rho0_eval, B_eval), K(0), "empty basis")
+            sage: H.candidate is None
+            True
+            sage: recon_add_rat(H, (rho0_eval, B_eval), K(1), "empty basis")
             sage: H.candidate
             ([], [])
 
@@ -290,8 +293,14 @@ def recon_add_rat(H,val,point,xkey):
 
     # Handle corner cases
     if len(L_rho0) == 0 and len(L_B) == 0:
+        # Require two distinct points with the same empty basis and shapes.
+        empty_shape = (shape_rho0, shape_B)
+        previous = H.recons.get(xkey)
+        if (point not in H.points and isinstance(previous, tuple)
+                and previous == empty_shape):
+            H.candidate = (val[0], val[1])
+        H.recons[xkey] = empty_shape
         H.points.add(point)
-        H.candidate = (val[0], val[1])
         return
     if len(L_rho0) == 0 or len(L_B) == 0:
         raise ValueError("Inconsistent empty stage-1 data")
@@ -439,14 +448,17 @@ class CRTLifter:
         p = ZZ(p)
         if p in self.shape_of:
             return
-        self.shape_of[p] = shape
+        residues = list(residues)
         c = self.classes.get(shape)
+        if c is not None and len(residues) != len(c["residues"]):
+            raise ValueError("Residue length does not match the existing CRT shape.")
         if c is None:
             self.classes[shape] = {
                 "modulus": p,
                 "residues": [ZZ(a) % p for a in residues],
                 "primes": {p},
             }
+            self.shape_of[p] = shape
             return
         M = c["modulus"]
         Minv = M.inverse_mod(p)
@@ -456,6 +468,7 @@ class CRTLifter:
                          for x, a in zip(c["residues"], residues)]
         c["modulus"] = M * p
         c["primes"].add(p)
+        self.shape_of[p] = shape
 
     def _majority(self):
         r"""Return ``(shape, class)`` for the class with the most primes (first-inserted on ties)."""

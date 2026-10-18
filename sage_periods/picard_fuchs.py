@@ -144,7 +144,7 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
     # TODO: Add possiblity of minimizing the diagonal operator using "guess and verify,"
     # plus rigourous verification of the minimization.
     if minimize:
-        Rvars = R_normalized.variables()
+        Rvars = vari_normalized
         Ring_min = PolynomialRing(QQ,Rvars).fraction_field()
         P = Ring_min(R_normalized).numerator()
         Q = Ring_min(R_normalized).denominator()
@@ -342,6 +342,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
 
             # Buckets for reconstructed operators (modulo many primes)
             L_recon_candidate = None
+            candidate_shape, candidate_primes = None, frozenset()
             '''
                 Notes on picking primes:
                 - Should be less than 2^31, so that we can store field elements as single int64 objects
@@ -421,7 +422,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                     continue
                 lifter.fold(p, ints, shape)
                 try:
-                    majority_shape, values, _ = lifter.lift_majority()
+                    majority_shape, values, majority_primes = lifter.lift_majority()
                     L_coeffs = operator_from_lift(t, majority_shape, values)
                 except NeedMorePrimesError:
                     L_coeffs = None
@@ -439,12 +440,15 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                     continue
 
                 # Check to see if L_coeffs has been assigned in L_recon_buckets and if it equals this value (stability)
-                if L_recon_candidate is not None and L_recon_candidate == L_coeffs:
+                if (L_recon_candidate is not None and L_recon_candidate == L_coeffs
+                        and majority_shape == candidate_shape
+                        and candidate_primes < majority_primes):
                     # We take this as the reconstructed operator having stabilized
                     # Break and return the operator
                     break
                 else:
                     L_recon_candidate = L_coeffs
+                    candidate_shape, candidate_primes = majority_shape, majority_primes
                     continue
             
         
