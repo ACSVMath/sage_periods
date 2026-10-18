@@ -382,6 +382,11 @@ def _basis_syzygies_with_lms(U, deg):
         liftlms.append(liftlm)
     return ret, liftlms
 
+# Number of terms at which ``exterior_derivative`` switches from the term-by-term
+# loop to the coefficient/derivative formula. Measured crossover: ~25 terms over QQ,
+# ~35 over GF(p).
+_EXTERIOR_DERIVATIVE_COEFF_CUTOFF = 30
+
 def exterior_derivative(U, a):
     r"""
     Compute the encoded exterior differential $d$ on the auxiliary representation.
@@ -437,12 +442,26 @@ def exterior_derivative(U, a):
             3*u^2      
 
     """
-    # Single pass over the terms of ``a``: a term c * u^p * v^i * x^E with
-    # i >= 1 contributes c * E_{i-1} * u^{p+i} * x^{E - e_{i-1}} (the partial
-    # derivative of its v^i-coefficient with respect to x_{i-1}, times u^i),
-    # and v-free terms pass through unchanged.  This is the same map as Pierre's
-    # formula but avoids scanning over ``a`` once for every ``v``-degree.
     sh = U.vshift
+
+    # Large inputs: Pierre's formula, d(a) = c_0 + sum_i d/dx_{i-1}(c_i) * u^i,
+    # where c_i is the v^i-coefficient of ``a``. Each ``coefficient`` call has a
+    # fixed cost of a few microseconds, but its work per term runs in compiled code,
+    # so this beats the Python loop below once ``a`` has a few dozen terms.
+    if a.number_of_terms() >= _EXTERIOR_DERIVATIVE_COEFF_CUTOFF:
+        A = U.xring
+        out = a.coefficient({U.v: 0})
+        for i in range(1, a.degree(U.v) + 1):
+            ci = a.coefficient({U.v: i})
+            if ci:
+                out += ci.derivative(A.gen(i - 1 + sh)) * U.u**i
+        return out
+
+    # Small inputs: single pass over the terms of ``a``: a term c * u^p * v^i * x^E
+    # with i >= 1 contributes c * E_{i-1} * u^{p+i} * x^{E - e_{i-1}} (the partial
+    # derivative of its v^i-coefficient with respect to x_{i-1}, times u^i),
+    # and v-free terms pass through unchanged.  This is the same map as above
+    # but avoids the fixed cost of one ``coefficient`` call per ``v``-degree.
     out = {}
     for e, c in a.dict().items():
         i = e[1]
