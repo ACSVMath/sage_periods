@@ -8,7 +8,7 @@ from .errors import *
 from sage.misc.verbose import verbose, set_verbose
 
 # Stage 1
-def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None):
+def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,staircase_keys=None):
     r"""
     Compute the Gauss-Manin matrix $B$ for the map defined by closing $\rho_0$ under the map $\rho \mapsto [f^\delta \rho]_r$,
     as described in Section 7.2 of Lairez 2016. Also returns the basis for the space and the projection of $a$ into this space.
@@ -26,9 +26,11 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None):
       It recors which syzygy staircase lifts contribute to our reduction,
       so later points only enumerate those. Tremendous time-saver.
     
-    * ``degree_hint`` -- Optional sample count before the first reconstruction
+    * ``degree_hint`` -- (Optional) A sample count before the first reconstruction
       attempt; subsequent attempts occur at each new point. This is a scheduling
       hint only, and does not bypass the reconstruction stability check.
+
+    * ``staircase_keys`` -- (Optional) A set recording staircase cache keys used by a probe.
 
     OUTPUT: 
     
@@ -127,7 +129,7 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None):
             continue
             
         # Build our RhamKoszulData object with evaluated f
-        U = RhamKoszulData(feval,r=r,profile=profile)
+        U = RhamKoszulData(feval,r=r,profile=profile,staircase_keys=staircase_keys)
         
         # Run gauss_manin_helper on <fteval,[aeval]>, with our prime and r
         try:

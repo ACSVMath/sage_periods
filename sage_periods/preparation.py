@@ -5,6 +5,8 @@ from sage.all import *
 from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency
 from .errors import *
 from .profiling import ProfileData
+from .reconstruction import reconstruction_degree_hint
+from .rham_koszul import _staircase_cache
 
 from sage.misc.verbose import verbose
 import multiprocessing
@@ -267,12 +269,14 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
     Probe r=1 and r=2 concurrently in separate single-process workers.
     Allow at most 30 seconds for r=2; r=1 has no timeout. Both start at
     the same prime, with independent bad-prime retries.
-    Return ``(reduction_order, seed)``,
+    Return ``(reduction_order, seed, degree_hint)``,
     where ``reduction_order`` is optimal choice of ``r`` and
     ``seed`` is a dict ``{prime: coeffs}`` for an operator modulo one prime.
     If ``r = 2`` is chosen, the ``ProfileData`` object ``profile`` (if given)
     is overwritten in place with the profile gathered by the ``r = 2`` probe;
-    otherwise it is left unchanged.
+    otherwise it is left unchanged. The returned degree hint schedules later
+    reconstruction attempts. Only staircase entries used by the winning
+    worker's successful attempt are imported into the parent's cache.
     """
     context = multiprocessing.get_context()
     first_prime = random_prime(2**26 - 1, proof=True, lbound=2**23)
@@ -311,7 +315,7 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
     if not usable:
         # Both r=1 and r=2 were bad; start main loop at r=3, with no seed data
         # (and a disabled profile, since profiling applies only at r=2).
-        return 3, {}
+        return 3, {}, None
 
     choice = min(usable, key=lambda result: result["score"])
 
@@ -326,7 +330,9 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
     if profile is not None and choice["r"] == 2:
         profile.copy_from(choice["profile"])
 
-    return choice["r"], seed
+    # Only the winning worker's used, coefficient-independent entries survive.
+    _staircase_cache.update(choice["staircases"])
+    return choice["r"], seed, choice["degree_hint"]
 
 # ~~ BOILERPLATE ~~
 def _probe_reduction_order_worker(*args):
@@ -360,7 +366,9 @@ def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None,
 
         try:
             # NOTE: Modifies profile in place
-            rho0, M, B = compute_gauss_manin_connection(a,f,r,p,profile=profile) # Future: Add argument ncpus=ncpus (passed in from caller)
+            staircase_keys = set()
+            rho0, M, B = compute_gauss_manin_connection(
+                a, f, r, p, profile=profile, staircase_keys=staircase_keys)
             
             if len(M) == 0 or rho0.nrows() == 0:
                 # The reduced class vanishes: the operator is 1.
@@ -389,7 +397,9 @@ def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None,
             )
 
             return {"r": r, "prime": p, "coeffs": coeffs, "score": score,
-                    "profile": profile}
+                    "profile": profile,
+                    "degree_hint": reconstruction_degree_hint(rho0, B),
+                    "staircases": {key: _staircase_cache[key] for key in staircase_keys}}
 
         except Exception as exc:
 

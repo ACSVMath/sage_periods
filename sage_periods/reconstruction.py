@@ -6,6 +6,7 @@ from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
 from sage.rings.rational_field import QQ
 from sage.rings.integer_ring import ZZ
 from sage.arith.misc import gcd
+from sage.arith.functions import lcm
 from sage.matrix.constructor import matrix
 from sage.structure.element import parent
 from sage.misc.misc_c import prod
@@ -403,6 +404,16 @@ def recon_add_rat(H,val,point,xkey):
 
     H.recons[key] = recon
     return
+
+
+def reconstruction_degree_hint(rho0, B):
+    """Sample-count estimate; acceptance still requires reconstruction stability."""
+    entries = [c for c in rho0.list() + B.list() if c]
+    degsum = max((c.numerator().degree() + c.denominator().degree()
+                  for c in entries), default=0)
+    den = lcm([c.denominator() for c in entries]) if entries else 1
+    maxnumdeg = max(((den*c).numerator().degree() for c in entries), default=0)
+    return max(degsum + 3, (3 * maxnumdeg) // 2 + 2)
 
 
 ##### Incremental CRT lifting across primes (Stage 3) #####

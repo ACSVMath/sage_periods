@@ -85,8 +85,10 @@ class RhamKoszulData:
     basis: object | None = None
     # Linearized engine
     eng: object | None = None
+    # Cache, which is read from when we do reduction order probe and passed to future points.
+    staircase_keys: object | None = None
 
-    def __init__(self,f,r=1,profile=None):
+    def __init__(self,f,r=1,profile=None,staircase_keys=None):
         r"""
         Initialise the Rham-Koszul reduction context attached to a homogeneous polynomial $f$.
 
@@ -134,6 +136,7 @@ class RhamKoszulData:
         self.fromx = fromx
         self.eng=None
         self.profile=profile
+        self.staircase_keys=staircase_keys
         self.used_syzlms=set()
         self.wdown_liftlms={}
     
@@ -325,6 +328,8 @@ def _syz_quotients(U, deg):
     key = (tuple(syzlm_exps),
            tuple(tuple(b.exponents()[0]) for b in U.tsyzlm),
            deg)
+    if U.staircase_keys is not None:
+        U.staircase_keys.add(key)
     quotients = _staircase_cache.get(key)
 
     if quotients is None:

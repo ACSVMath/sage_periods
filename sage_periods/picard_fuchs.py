@@ -11,7 +11,7 @@ from sage.all import *
 from .diagonal import minimize_diagonal_annihilator, diagonal_to_period, normalize_diagonal_arguments
 from .preparation import compute_homogenization, compute_prepared_fraction, minimize_denominator_degree, probe_reduction_order
 from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency
-from .reconstruction import CRTLifter, operator_residues, operator_from_lift
+from .reconstruction import CRTLifter, operator_residues, operator_from_lift, reconstruction_degree_hint
 from .errors import *
 from .profiling import ProfileData
 
@@ -305,11 +305,12 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     # if both execution times are under 30 seconds.
     # Else, pick whichever one is faster.
     seed = {}
+    degree_hint = None
     profile = ProfileData()
     if reduction_order is None:
         verbose("Choosing the reduction order by probing modulo one prime.",level=1)
         # NOTE: This function modifies profile in place
-        r, seed = probe_reduction_order(a, f,ensure_termination, profile=profile) # Future: add , "ncpus=ncpus", passed in from caller.
+        r, seed, degree_hint = probe_reduction_order(a, f,ensure_termination, profile=profile) # Future: add , "ncpus=ncpus", passed in from caller.
         verbose(f"Auto-probe selected reduction order r = {r}.",level=1)
     else:
         r = Integer(reduction_order)
@@ -327,7 +328,6 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             # (so degenerate primes sit in minority classes instead of being discarded).
             # Start from the probe's operator (if any): it was computed at this same r,
             # so is valid.
-            degree_hint = None  # Relearn when reduction order changes.
             lifter = CRTLifter()
             Lp_coeffs_dict = set(seed)
             for sp, sc in seed.items():
@@ -380,16 +380,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                     raise e
                 
                 if degree_hint is None:
-                    # Scheduling estimate only; later primes still require stability.
-                    # The hint must also pass recon_add_rat's numerator check
-                    # deg(den*entry) <= 2/3 * #points, where den is the common denominator.
-                    entries = [c for c in rho0.list() + B.list() if c]
-                    degsum = max((c.numerator().degree() + c.denominator().degree()
-                                  for c in entries), default=0)
-                    den = lcm([c.denominator() for c in entries]) if entries else 1
-                    maxnumdeg = max(((den*c).numerator().degree() for c in entries), default=0)
-                    degree_hint = max(degsum + 3, floor(QQ(3)/2*maxnumdeg) + 2)
-                    # TODO: Better heuristic? Though this is pretty good, as it learns from first prime.
+                    degree_hint = reconstruction_degree_hint(rho0, B)
 
                 # If we get a trivial basis, then we're done.
                 if len(M) == 0 or rho0.nrows() == 0:
@@ -460,6 +451,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             # Reset profile and seeded operator because they belong to the previous r.
             profile.reset()
             seed = {}
+            degree_hint = None
             continue
 
     # _first_run = False
