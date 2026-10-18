@@ -7,8 +7,19 @@ from .errors import *
 
 from sage.misc.verbose import verbose, set_verbose
 
+def prepare_coefficient_data(a, f):
+    """Immutable characteristic-zero tables for f, fdelta, and a."""
+    def table(coefficients):
+        return tuple((e, c.numerator(), c.denominator())
+                     for e, c in coefficients if c)
+    fdict = f.dict()
+    return (table(fdict.items()),
+            table((e, c.derivative()) for e, c in fdict.items()),
+            table(a.dict().items()))
+
+
 # Stage 1
-def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,staircase_keys=None):
+def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,staircase_keys=None,coefficient_data=None):
     r"""
     Compute the Gauss-Manin matrix $B$ for the map defined by closing $\rho_0$ under the map $\rho \mapsto [f^\delta \rho]_r$,
     as described in Section 7.2 of Lairez 2016. Also returns the basis for the space and the projection of $a$ into this space.
@@ -56,19 +67,12 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
     H = ReconstructionData()
     H.first_tick = degree_hint
 
-    # Build coefficient tables for reducing a, f, f^delta mod p;
-    # instead of evaluating from SR once per point, per prime.
-    fdict = f.dict()
-    fdelta = A({ key: fdict[key].derivative() for key in fdict.keys()})
+    if coefficient_data is None:
+        coefficient_data = prepare_coefficient_data(a, f)
 
-    def _build_coefficient_table(poly):
-        r""" Reduces a polynomial ``poly`` in A to a dictionary indexed by
-        its ``A``-monomial exponent vectors, with values a pair ``(p_g,p_h)``
-        representing numerator and denominator polynomials in ``GF(p)[t]``
-        of the original ``K`-rational function coefficient.
-        """
-        table = [(e, Rp(c.numerator()), Rp(c.denominator()))
-                 for e, c in poly.dict().items()]
+    def _build_coefficient_table(source):
+        """Reduce the fixed coefficient data modulo this prime."""
+        table = [(e, Rp(num), Rp(den)) for e, num, den in source]
         if any(den.is_zero() for _, _, den in table):
             raise BadPrimeError(
                 "A coefficient denominator vanishes identically modulo p.",
@@ -94,9 +98,7 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
         return AF(out)
 
     try:
-        ftab = _build_coefficient_table(f)
-        fdeltatab = _build_coefficient_table(fdelta)
-        atab = _build_coefficient_table(a)
+        ftab, fdeltatab, atab = map(_build_coefficient_table, coefficient_data)
     except BadPrimeError:
         raise
     except (ArithmeticError, TypeError, ValueError) as exc:
@@ -163,6 +165,21 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
             return H.candidate[0], basis, H.candidate[1] # rho0, M, B
         # Else, continue.
 
+def _extend_echelon(basis, row):
+    """Add a finite-field row if independent; inputs are left unchanged.
+
+    Rows stay in discovery order. Each is zero at all earlier pivots, so
+    eliminating in that order never reintroduces an already cleared pivot.
+    """
+    for pivot, previous in basis:
+        if row[pivot]:
+            row = row - row[pivot] * previous
+    positions = row.nonzero_positions()
+    if positions:
+        pivot = positions[0]
+        basis.append((pivot, row / row[pivot]))
+
+
 # Stage 2
 def compute_reductions_dependency(rho0,B,ensure_termination):
     r"""
@@ -215,19 +232,18 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
     def _draw_point_and_evaluate():
         while True:
             u0 = F.random_element()
+            basis = []
             try:
-                return u0, [[c(u0) for c in v] for v in rho]
+                for v in rho:
+                    _extend_echelon(basis, vector(F, [c(u0) for c in v]))
+                return u0, basis
             except (ZeroDivisionError, ArithmeticError):
-                # u0 is a pole of some entry; try another point.
+                # Rebuild from scratch if any previous iterate has a pole.
                 continue
 
-    m=0
-    # All our rho[i]'s should be represented by vectors with respect to M
-    # Since rho0 is a matrix, this is easy
+    m = 0
     rho = [vector(rho0.list())]
-
-    if not ensure_termination:
-        u0, rho_ev = _draw_point_and_evaluate()
+    u0, echelon = None, []
 
     while True:
         verbose("        m: "+str(m),level=1)
@@ -236,16 +252,20 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
         y = None
         independent = False
 
-        # Compute rank
         if ensure_termination:
-            M = Matrix(K,rho).transpose()
+            M = Matrix(K, rho).transpose()
+            independent = M.rank() == m + 1
         else:
-            M = Matrix(F,rho_ev)
+            try:
+                if u0 is None:
+                    u0, echelon = _draw_point_and_evaluate()
+                else:
+                    _extend_echelon(echelon, vector(F, [c(u0) for c in rho[m]]))
+            except (ZeroDivisionError, ArithmeticError):
+                u0, echelon = _draw_point_and_evaluate()
+            independent = len(echelon) == m + 1
 
-        # If rank increases, we're independent.
-        if M.rank() == m + 1:
-            independent = True
-        else:
+        if not independent:
             # Possible dependency; decide exactly over GF(p)(t) by solving for
             # coefficients expressing rho_m in terms of the lower rho_k.
             try:
@@ -255,18 +275,12 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
                 if not ensure_termination:
                     # Spurious rank drop at u0: rho[m] is independent after all.
                     independent = True
-                    u0, rho_ev = _draw_point_and_evaluate()
+                    u0 = None  # Rebuild all specialized rows on the next iteration.
                 else:
                     raise ValueError("Oh no! Couldn't find dependency despite rank drop in exact case.")
 
         if independent:
             rho.append(vector([ fn.derivative(t)for fn in rho[m]]) + B*rho[m])
-            if not ensure_termination:
-                try:
-                    rho_ev.append([c(u0) for c in rho[m+1]])
-                except (ZeroDivisionError, ArithmeticError):
-                    # u0 is a pole of the new iterate: redraw the filter point.
-                    u0, rho_ev = _draw_point_and_evaluate()
             m += 1
             continue
 

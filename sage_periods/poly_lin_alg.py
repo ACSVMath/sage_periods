@@ -78,9 +78,10 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     # CombinatorialFreeModule) lets us build the coefficient matrix straight
     # from the polynomial dictionaries.
     sortkey = A.term_order().sortkey
+    dictionaries = [p.dict() for p in L]
     exps = set()
-    for p in L:
-        exps.update(p.dict().keys())
+    for coefficients in dictionaries:
+        exps.update(coefficients)
     exps = sorted(exps, key=sortkey, reverse=True)
     index = {e: j for j, e in enumerate(exps)}
 
@@ -89,8 +90,8 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     # Fill a zero dense matrix entry by entry: much faster than passing a dict
     # to the Matrix constructor.
     mat = Matrix(A.base_ring(), len(L), len(exps), sparse=False)
-    for i, p in enumerate(L):
-        for e, c in p.dict().items():
+    for i, coefficients in enumerate(dictionaries):
+        for e, c in coefficients.items():
             mat[i, index[e]] = c
 
     # If requested, record which input rows form a basis of the row space
@@ -170,7 +171,8 @@ def linear_normal_form_p(L0 , M, reduce):
         m = M[j].lm()
         for i in range(len(L)):
             c = L[i].monomial_coefficient(m)
-            L[i] -= c*M[j]
+            if c:
+                L[i] -= c*M[j]
 
     if reduce:
         # Optinally normalize the residual family itself

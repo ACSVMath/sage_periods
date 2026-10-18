@@ -2,7 +2,7 @@ r"""Functions used in preparing rational period intetgral for modular pipeline."
 
 from sage.all import *
 
-from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency
+from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, prepare_coefficient_data
 from .errors import *
 from .profiling import ProfileData
 from .reconstruction import reconstruction_degree_hint
@@ -264,7 +264,7 @@ def minimize_denominator_degree(R, xgens, rounds=3, concurrent=10, time_cap=30.0
 
 # NOTE: This function assumes that, generically, a call with r=1 will be faster than a call with r=2.
 # We should see how reasonable this assumption is.
-def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
+def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None, coefficient_data=None):
     r"""
     Probe r=1 and r=2 concurrently in separate single-process workers.
     Allow at most 30 seconds for r=2; r=1 has no timeout. Both start at
@@ -276,8 +276,12 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
     is overwritten in place with the profile gathered by the ``r = 2`` probe;
     otherwise it is left unchanged. The returned degree hint schedules later
     reconstruction attempts. Only staircase entries used by the winning
-    worker's successful attempt are imported into the parent's cache.
+    worker's successful attempt are imported into the parent's cache. Optional
+    ``coefficient_data`` supplies precomputed characteristic-zero coefficient
+    tables; otherwise they are prepared once here and shared with both workers.
     """
+    if coefficient_data is None:
+        coefficient_data = prepare_coefficient_data(a, f)
     context = multiprocessing.get_context()
     first_prime = random_prime(2**26 - 1, proof=True, lbound=2**23)
 
@@ -287,11 +291,11 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None):
         with context.Pool(processes=1) as pool_r2:
             pending_r2 = pool_r2.apply_async(
                 _probe_reduction_order_worker,
-                (a, f, 2, ensure_termination, first_prime, ProfileData(), 1),
+                (a, f, 2, ensure_termination, first_prime, ProfileData(), 1, coefficient_data),
             )
             pending_r1 = pool_r1.apply_async(
                 _probe_reduction_order_worker,
-                (a, f, 1, ensure_termination, first_prime, None, 1),
+                (a, f, 1, ensure_termination, first_prime, None, 1, coefficient_data),
             )
             try:
                 result_r2 = _probe_worker_result(pending_r2, timeout=30.0)
@@ -356,9 +360,11 @@ def _probe_worker_result(pending, timeout=None):
     raise error
 
 
-def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None, profile=None, ncpus=1):
+def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None, profile=None, ncpus=1, coefficient_data=None):
     r"""Compute one modular probe and its comparison score."""
     p = first_prime
+    if coefficient_data is None:
+        coefficient_data = prepare_coefficient_data(a, f)
 
     for attempt in range(5):
         if p is None:
@@ -368,7 +374,8 @@ def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None,
             # NOTE: Modifies profile in place
             staircase_keys = set()
             rho0, M, B = compute_gauss_manin_connection(
-                a, f, r, p, profile=profile, staircase_keys=staircase_keys)
+                a, f, r, p, profile=profile, staircase_keys=staircase_keys,
+                coefficient_data=coefficient_data)
             
             if len(M) == 0 or rho0.nrows() == 0:
                 # The reduced class vanishes: the operator is 1.

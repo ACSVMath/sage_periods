@@ -10,7 +10,7 @@ from sage.all import *
 # from .rham_koszul import RhamKoszulData, gauss_manin_helper
 from .diagonal import minimize_diagonal_annihilator, diagonal_to_period, normalize_diagonal_arguments
 from .preparation import compute_homogenization, compute_prepared_fraction, minimize_denominator_degree, probe_reduction_order
-from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency
+from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, prepare_coefficient_data
 from .reconstruction import CRTLifter, operator_residues, operator_from_lift, reconstruction_degree_hint
 from .errors import *
 from .profiling import ProfileData
@@ -304,13 +304,14 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     # and start at whichever produces the operator of smaller order, 
     # if both execution times are under 30 seconds.
     # Else, pick whichever one is faster.
+    coefficient_data = prepare_coefficient_data(a, f)
     seed = {}
     degree_hint = None
     profile = ProfileData()
     if reduction_order is None:
         verbose("Choosing the reduction order by probing modulo one prime.",level=1)
         # NOTE: This function modifies profile in place
-        r, seed, degree_hint = probe_reduction_order(a, f,ensure_termination, profile=profile) # Future: add , "ncpus=ncpus", passed in from caller.
+        r, seed, degree_hint = probe_reduction_order(a, f,ensure_termination, profile=profile, coefficient_data=coefficient_data) # Future: add , "ncpus=ncpus", passed in from caller.
         verbose(f"Auto-probe selected reduction order r = {r}.",level=1)
     else:
         r = Integer(reduction_order)
@@ -371,7 +372,8 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 try:
                     # NOTE: This function modifies profile in place
                     rho0, M, B = compute_gauss_manin_connection(
-                        a, f, r, p, profile=profile, degree_hint=degree_hint)
+                        a, f, r, p, profile=profile, degree_hint=degree_hint,
+                        coefficient_data=coefficient_data)
                 except BadPrimeError:
                     bad_primes.append(p)
                     continue
