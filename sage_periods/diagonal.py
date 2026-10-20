@@ -3,6 +3,8 @@ r"""Utilities for working with diagonals."""
 from sage.all import *
 from ore_algebra import OreAlgebra as _OreAlgebra
 from ore_algebra import guess as _guess
+from sage.misc.verbose import verbose
+
 
 def normalize_diagonal_arguments(R, r = None, vari = None, Dt = None, t = None):
     r"""
@@ -187,6 +189,13 @@ def minimize_diagonal_annihilator(L, P, Q, r, t,ncpus=1):
         print("Guessed operator does not right-divide L; keeping L.")
         return L
 
+    # L = quo * M only over QQ(t): quo generally has rational coefficients, and
+    # ore_algebra's indicial_polynomial requires polynomial ones. Left-multiplying
+    # by a nonzero c(t) only scales the indicial polynomial at 0 by a constant,
+    # so clearing denominators leaves its integer roots unchanged.
+    quo_coeffs = list(quo.list())
+    quo_den = lcm([Rt(c.denominator()) for c in quo_coeffs])
+    quo = Alg([Rt(quo_den * c) for c in quo_coeffs])
     ind = quo.indicial_polynomial(Rt.gen())
     sigma = max([rt for rt in ind.roots(ZZ, multiplicities=False) if rt >= 0], default=-1)
 

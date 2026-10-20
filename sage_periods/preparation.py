@@ -11,6 +11,8 @@ from .rham_koszul import _staircase_cache
 from sage.misc.verbose import verbose
 import multiprocessing
 import traceback
+import random
+import time
 
 def compute_homogenization(R, k=None, t = None, homog_var = None):
     r"""
@@ -197,56 +199,66 @@ def compute_prepared_fraction(R,t = None):
     else:
         return A(a),A(f),q
 
-# TODO
 def minimize_denominator_degree(R, xgens, rounds=3, concurrent=10, time_cap=30.0):
     r"""
     Torus (monomial) change of variables lowering the denominator degree.
 
-    Port of the ``minimize_degree`` heuristic of Lairez's MAGMA package: a
-    random walk over the unimodular substitutions $x_i \mapsto 1/x_i$ and
-    $x_i \mapsto x_i x_j^{\pm 1}$, applied to the $\dd x/x$-normalized
-    integrand $h = R\,\prod_i x_i$, keeping a pool of the best candidates
-    and stopping after ``rounds`` rounds without improvement (or after
-    ``time_cap`` seconds).  Returns the transformed integrand
-    $h'/\prod_i x_i$, or ``R`` itself if no improvement was found.
+    A random walk over the unimodular substitutions $x_i \mapsto 1/x_i$ and
+    $x_i \mapsto x_i x_j^{\pm 1}$ ($x_i, x_j$ in ``xgens``), applied to the
+    $dx/x$-normalized integrand $h = R\,\prod_{x_i \in xgens} x_i$, keeping a
+    pool of the best candidates and stopping after ``rounds`` rounds without
+    improvement (or after ``time_cap`` seconds).  Returns the transformed
+    integrand $h'/\prod_{x_i \in xgens} x_i$, or ``R`` itself if no
+    improvement was found.
+
+    ``concurrent'' measures how many items we should keep in our pool concurrently.
 
     This is an internal function for sage_periods, and is not meant to be
     called by the user.
     """
-    import random as _random
-    import time as _time
-    rng = _random.Random(20260803)
-    prodx = prod(xgens)
-    h = R * prodx
+    rng = random.Random(20260803)
+    if R.is_zero():
+        return R
+    B = R.parent()
+    A = B.ring()
+    h = R * prod(xgens)
+    num_coeffs = list(h.numerator().dict().items())
+    den_coeffs = list(h.denominator().dict().items())
+    num_exps = tuple(tuple(e) for e, _ in num_coeffs)
+    den_exps = tuple(tuple(e) for e, _ in den_coeffs)
+
+    # Indicator vector of the torus coordinates divided out by prod(xgens).
+    gen_index = {str(g): k for k, g in enumerate(A.gens())}
+    xidx = {gen_index[str(v)] for v in xgens}
+    torus = tuple(1 if k in xidx else 0 for k in range(A.ngens()))
 
     # Restrict the walk to the variables that actually occur in h: the
-    # integrand may be independent of some torus coordinates (for instance
-    # the diagonal integrand of 1/(1-x*y) collapses to 1/((1-t)*y), whose
-    # h = R*prod(x) is the constant 1/(1-t)). A monomial substitution in
-    # an absent variable fixes h, so we needn't include them.
-    Agens = {str(g): g for g in h.numerator().parent().gens()}
-    walkgens = [v for v in xgens
-                if h.numerator().degree(Agens[str(v)]) > 0
-                or h.denominator().degree(Agens[str(v)]) > 0]
-    if not walkgens:
+    # integrand may be independent of some torus coordinates.A monomial 
+    # substitution in an absent variable fixes h, so we needn't include them.
+    walk = [k for k in sorted(xidx)
+            if any(e[k] for e in num_exps) or any(e[k] for e in den_exps)]
+    if not walk:
         return R
 
-    start = (h / prodx).denominator().degree()
+    st = (num_exps, den_exps)
+    start = _denominator_degree(st, torus)
     cur = start
-    pool = [h]
+    pool = [st]
     stall = 0
-    t0 = _time.time()
-    while stall <= rounds and _time.time() - t0 < time_cap:
+    t0 = time.time()
+    while stall <= rounds and time.time() - t0 < time_cap:
+        # Same neighbour order as the substitution-based walk, so that the
+        # seeded shuffle picks the same candidates.
         neighbors = []
-        for hh in pool:
-            for i, xi in enumerate(walkgens):
-                neighbors.append(hh.subs({xi: 1 / xi}))
-                for j, xj in enumerate(walkgens):
+        for st in pool:
+            for i in walk:
+                neighbors.append(tuple(tuple(e[:i] + (-e[i],) + e[i+1:] for e in exps) for exps in st))     # x_i -> 1/x_i
+                for j in walk:
                     if i == j:
                         continue
-                    neighbors.append(hh.subs({xi: xi * xj}))
-                    neighbors.append(hh.subs({xi: xi / xj}))
-        degs = [(hh / prodx).denominator().degree() for hh in neighbors]
+                    neighbors.append(tuple(tuple(e[:j] + (e[j] + e[i],) + e[j+1:] for e in exps) for exps in st))   # x_i -> x_i*x_j
+                    neighbors.append(tuple(tuple(e[:j] + (e[j] - e[i],) + e[j+1:] for e in exps) for exps in st))  # x_i -> x_i/x_j
+        degs = [_denominator_degree(st, torus) for st in neighbors]
         m = min(degs)
         if m < cur:
             stall = 0
@@ -254,16 +266,48 @@ def minimize_denominator_degree(R, xgens, rounds=3, concurrent=10, time_cap=30.0
             stall += 1
         if m <= cur:
             cur = min(cur, m)
-            cand = [hh for hh, dd in zip(neighbors, degs) if dd <= cur]
+            cand = [st for st, dd in zip(neighbors, degs) if dd <= cur]
             rng.shuffle(cand)
             pool = cand[:concurrent]
     if cur >= start:
         return R
     verbose(f"minimize_denom_deg: denominator degree reduced from {start} to {cur}.", level=1)
-    return pool[0] / prodx
 
-# NOTE: This function assumes that, generically, a call with r=1 will be faster than a call with r=2.
-# We should see how reasonable this assumption is.
+    # Build h'/prod(xgens) = x^d * P'/Q', where P', Q' are the transformed
+    # numerator/denominator with their monomial content removed, and
+    # d = min(P) - min(Q) - torus. Put x^max(d,0) up and x^max(-d,0) down.
+    num_exps, den_exps = pool[0]
+    num_min, den_min = _min_exponent(num_exps), _min_exponent(den_exps)
+    d = [a - b - c for a, b, c in zip(num_min, den_min, torus)]
+    num_shift = [max(dk, 0) - mk for dk, mk in zip(d, num_min)]
+    den_shift = [max(-dk, 0) - mk for dk, mk in zip(d, den_min)]
+    num = A({tuple(ek + sk for ek, sk in zip(e, num_shift)): c
+             for e, (_, c) in zip(num_exps, num_coeffs)})
+    den = A({tuple(ek + sk for ek, sk in zip(e, den_shift)): c
+             for e, (_, c) in zip(den_exps, den_coeffs)})
+    return B(num) / B(den)
+
+
+def _min_exponent(exps):
+    r"""Componentwise minimum of a nonempty tuple of exponent vectors."""
+    return tuple(min(col) for col in zip(*exps))
+
+
+def _denominator_degree(st, torus):
+    r"""
+    Total degree of the reduced denominator of $h/\prod_{torus} x_i$, where
+    ``st = (num_exps, den_exps)`` are the (Laurent) supports of a coprime
+    numerator/denominator pair $P, Q$ of $h$. Writing $P = x^{m_P} P'$ and
+    $Q = x^{m_Q} Q'$ with $P', Q'$ coprime polynomials free of monomial
+    factors, the reduced denominator is $Q' x^{\max(0,\, torus - m_P + m_Q)}$.
+    """
+    num_exps, den_exps = st
+    num_min, den_min = _min_exponent(num_exps), _min_exponent(den_exps)
+    deg_q = max(sum(e) for e in den_exps) - sum(den_min)
+    return deg_q + sum(max(0, c - a + b) for a, b, c in zip(num_min, den_min, torus))
+
+
+
 def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None, coefficient_data=None):
     r"""
     Probe r=1 and r=2 concurrently in separate single-process workers.

@@ -286,7 +286,7 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
 
         # At this point, we have our coefficient vector. We could return, but we should clear denominators first to make CRT possible.
 
-        # Clear denominators; return operator! (no need to discard primes now)
+        # Clear denominators; return dependency relation (no need to discard primes now)
         Rp = K.ring()
         denoms = [ai.denominator() for ai in y]
         LCM = lcm(denoms) if denoms else Rp.one()

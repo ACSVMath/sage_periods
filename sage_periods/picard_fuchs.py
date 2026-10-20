@@ -46,8 +46,10 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
       ``minimize`` is set to ``False``.
     * ``certify`` -- Reserved for partial certificates; ``True`` currently raises
       ``NotImplementedError``.
-    * ``minimize_denom_deg`` -- Reserved for torus degree minimization; ``True``
-      currently raises ``NotImplementedError``. ``None`` and ``False`` disable it.
+    * ``minimize_denom_deg`` -- (Optional) Torus change-of-variables preprocessing
+      lowering the denominator degree (see ``compute_period_annihilator``); can
+      greatly speed up computation. ``None`` (default) and ``True`` both apply it
+      over all torus variables, ``False`` disables it.
     * ``ncpus`` -- (Optional) Parameter specifying number of CPU cores to use for
       multiprocessing.
     * ``ensure_termination`` -- (Optional) Some speedups (e.g. rank specialization in Stage 2) lack termination guarantees,
@@ -104,6 +106,12 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
     # vari / r - entry order is optimized for minimal complexity in the resulting diagonal transformation,
     # and t and Dt are defined.
     R_normalized, r, vari_normalized, Dt, t = normalize_diagonal_arguments(R,r,vari,Dt,t)
+
+    # The diagonal is (2 pi i)^(1-d) times the integral of the diagonal integrand G over a
+    # torus |x_i| = eps_i (any convergent Laurent expansion is extracted over such a torus),
+    # so the torus contract of Lemma 9.1(i) suffices: walk over all torus variables by default.
+    if minimize_denom_deg is None:
+        minimize_denom_deg = True
     
     # !! vari and r may be reordered in order to make our diagonal transformation "nicer."
     # Also, if R was an element in a fraction field, we will have created symbolic variables
@@ -167,8 +175,14 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
      which is likely to give the best combination of small operator size and small runtime.
     * ``certify`` -- Reserved for partial certificates; ``True`` currently raises
       ``NotImplementedError``.
-    * ``minimize_denom_deg`` -- Reserved for torus degree minimization; ``True``
-      currently raises ``NotImplementedError``. ``None`` and ``False`` disable it.
+    * ``minimize_denom_deg`` -- (Optional) Torus (monomial) change of variables lowering the denominator degree
+      before the reduction pipeline. ``None`` (default): walk
+      only over the variables $x_i$ dividing the denominator of ``R``; then the
+      output still annihilates the periods of ``R`` over all cycles (does nothing
+      when no $x_i$ divides the denominator). ``True``: walk over all
+      $x_i$; the output is then only guaranteed to annihilate periods over
+      cycles in the torus $(\mathbb{C}^*)^n$ (e.g. residues, diagonals,
+      constant terms). ``False``: disabled.
     * ``ncpus`` -- (Optional) Parameter specifying number of CPU cores to use for
       multiprocessing.
     * ``ensure_termination`` -- (Optional) Some speedups (e.g. rank specialization in Stage 2) lack termination guarantees,
@@ -231,8 +245,6 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
 
     if certify:
         raise NotImplementedError("Period certificates are not implemented yet.")
-    if minimize_denom_deg:
-        raise NotImplementedError("Denominator-degree minimization is not implemented yet.")
     verbose(f"Computing operator annihilating residue of {R}", level=1)
     
     '''
@@ -272,14 +284,21 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     # reset(str(t_symbolic))
     # for x in vari_normalized:
     #     reset(str(x))
+
+    # Torus (monomial) change of variables lowering the denominator degree
+    if minimize_denom_deg is not False and not R.is_zero():
+        xgens = list(B.gens())[:-1]  # exclude the homogenization variable
+        if minimize_denom_deg is None:
+            # Auto: walk only over the x_i dividing the reduced denominator.
+            den_exps = R.denominator().exponents()
+            xgens = [x for k, x in enumerate(xgens) if all(e[k] > 0 for e in den_exps)]
+        if xgens:
+            R = minimize_denominator_degree(R, xgens)
     
     # Prepare our rational function
     Fhom = compute_homogenization(R)
     a,f,q = compute_prepared_fraction(Fhom)
     verbose(f"The prepared fraction has the form (a,f,q) = {(a,f,q)}",level=1)
-
-
-    # TODO: Denominator-degree minimization is currently unsupported (checked above).
 
 
     # Build OreAlgebra object associated with this ring (if possible)
