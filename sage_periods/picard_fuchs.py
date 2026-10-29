@@ -175,8 +175,8 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
      which is likely to give the best combination of small operator size and small runtime.
     * ``certify`` -- Reserved for partial certificates; ``True`` currently raises
       ``NotImplementedError``.
-    * ``minimize_denom_deg`` -- (Optional) Torus (monomial) change of variables lowering the denominator degree
-      before the reduction pipeline. ``None`` (default): walk
+    * ``minimize_denom_deg`` -- (Optional) Torus (monomial) change of variables lowering the 
+      denominator degree before the reduction pipeline. ``None`` (default): walk
       only over the variables $x_i$ dividing the denominator of ``R``; then the
       output still annihilates the periods of ``R`` over all cycles (does nothing
       when no $x_i$ divides the denominator). ``True``: walk over all
