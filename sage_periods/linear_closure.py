@@ -30,10 +30,10 @@ cached.  Dense echelonization goes through the same
 columns sorted by the same degrevlex key, so pivot choices -- and hence
 every output -- coincide exactly with the polynomial implementation.
 
-The engine is used automatically by ``gauss_manin_helper`` when the
-coefficient field is a prime finite field (i.e., in the modular pipeline);
-the polynomial implementation remains in place for other base rings and 
-for the certificate variant.
+The engine is used by ``gauss_manin_helper`` at reduction order $r \ge 2$
+when the coefficient field is a prime finite field (i.e., in the modular
+pipeline) and ``rham_koszul.USE_LINEAR_ENGINE`` is set; the polynomial
+implementation remains in place for $r = 1$ and for other base rings.
 """
 
 import numpy as np
@@ -42,6 +42,11 @@ import scipy.sparse as _sp
 from sage.matrix.constructor import Matrix, matrix
 from sage.libs.singular.function_factory import ff
 from sage.rings.polynomial.polydict import ETuple
+
+
+from .errors import ReductionOrderTooSmallError
+from .syzygy_lifts import _selected_lifts
+from .gauss_manin_data import RKGaussManinData
 
 
 class LinearEngine:
@@ -306,6 +311,33 @@ class LinearEngine:
         self.step_arr[c] = cached
         return cached
 
+    def step_row(self, row):
+        r"""Apply the cached composed normal-form/differential map to one row."""
+        out = {}
+        get = out.get
+        for c, v in row.items():
+            targets, values = self.step_image(c)
+            for target, value in zip(targets, values):
+                out[target] = get(target, 0) + v * value
+        p = self.p
+        return {c: residue for c, value in out.items()
+                if (residue := value % p)}
+
+    def direct_reduction_step(self, rows):
+        r"""Reduce a small batch as polynomials, returning coefficient rows.
+
+        Singular reduces whole rows in one call. For a small batch this avoids
+        constructing and converting the normal form of every source monomial.
+        The rest of the closure still uses indexed coefficient rows.
+        """
+        ring = self.U.xring
+        field = ring.base_ring()
+        exps = self.exps
+        polys = [ring({ETuple(list(exps[c])): field(v)
+                       for c, v in row.items()}) for row in rows]
+        reduced = ff.reduce(ring.ideal(polys), self.U.jac)
+        return [self.ext_row(self.row_of_poly(poly)) for poly in reduced]
+
     def elementary_reduction_step(self, rows):
         r"""
         Apply one batched Griffiths-Dwork step to sparse coefficient rows.
@@ -314,8 +346,9 @@ class LinearEngine:
         differentiation are composed into the cached column map
         ``c -> d(NF(c))``.  One sparse matrix product then computes the
         complete step without materializing an intermediate normal form or
-        performing a second derivative-scatter conversion.  Small batches
-        retain the lower-overhead direct dictionary implementation.
+        performing a second derivative-scatter conversion.  Armed-profile
+        batches with few rows use a whole-polynomial Singular reduction;
+        other small batches use the cached dictionary scatter.
         """
         if not rows:
             return []
@@ -324,14 +357,19 @@ class LinearEngine:
         for row in rows:
             allcols.update(row)
             nnz += len(row)
+        # The armed profile often leaves only a few dozen input rows.  On
+        # those batches Singular's whole-polynomial reduction is cheaper than
+        # reducing every distinct monomial and converting all its normal forms.
+        if self.U.profile_active and len(rows) <= 64 and nnz <= 1024:
+            return self.direct_reduction_step(rows)
+
         self.ensure_nf(allcols)
         p = self.p
 
-        # For tiny batches the sparse-matrix round trip costs more than the
-        # direct dictionary substitution; both compute the same map.
-        # TODO: replace this with adaptive threshold (how?)
+        # For tiny batches the sparse-matrix round trip costs more than a
+        # direct application of the cached composed column map.
         if nnz < 400:
-            return [self.ext_row(self.nf_row(row)) for row in rows]
+            return [self.step_row(row) for row in rows]
 
         # Assemble the batch and composed operator in the stable global
         # column coordinates.  Keeping those coordinates avoids the Python
@@ -411,20 +449,14 @@ class LinearEngine:
         for row in rows:
             active.update(row)
         cols = sorted(active, key=lambda c: self.skey[c], reverse=True)
-        # Sparse entries-dict construction (the input rows are sparse), with
-        # the column renumbering done as one vectorized lookup.
-        colmap = np.empty(len(self.exps), dtype=np.int64)
-        colmap[np.fromiter(cols, dtype=np.int64, count=len(cols))] = \
-            np.arange(len(cols), dtype=np.int64)
-        xr, xc, xv = [], [], []
+        # Sage's dense matrix constructor spends substantial time converting
+        # an entries dictionary. Fill the preallocated matrix directly, as in
+        # the polynomial backend.
+        colmap = {c: j for j, c in enumerate(cols)}
+        mat = Matrix(self.U.ring.base_ring(), len(rows), len(cols), sparse=False)
         for i, row in enumerate(rows):
-            xr.extend([i] * len(row))
-            xc.extend(row.keys())
-            xv.extend(row.values())
-        xj = colmap[np.array(xc, dtype=np.int64)].tolist()
-        entries = dict(zip(zip(xr, xj), xv))
-        mat = Matrix(self.U.ring.base_ring(), len(rows), len(cols), entries,
-                     sparse=False)
+            for c, v in row.items():
+                mat[i, colmap[c]] = v
         piv = mat.pivot_rows() if want_pivots else None
         mat.echelonize()
         out = []
@@ -472,17 +504,12 @@ class LinearEngine:
         r"""
         Coefficient rows of the degree ``deg`` slice of the non-trivial
         syzygy space, together with the leading monomial exponent of each
-        lift.  Uses the same cached staircase enumeration and armed-profile
-        filter as ``_basis_syzygies_with_lms``; a staircase lift is the
-        exponent shift of a syzygy generator, so no polynomial products
-        are formed.
+        lift.  The lifts come from ``_selected_lifts``, the same cached
+        staircase enumeration + profiling filter used by
+        ``_basis_syzygies_with_lms``, so filtered lifts are skipped before
+        any row is built.  A staircase lift is the exponent shift of a
+        syzygy generator, so no polynomial products are formed.
         """
-        from .rham_koszul import _syz_quotients
-        U = self.U
-        quotients, syzlm_exps = _syz_quotients(U, deg)
-        # filt = None
-        # if U.profile is not None and U.profile.get("armed") and U.r == 2: # TODO
-        #     filt = U.profile["syzlm"]
         # numpy views of the syzygy term exponents, for vectorized shifts.
         syz_np = getattr(self, "_syz_np", None)
         if syz_np is None:
@@ -495,10 +522,7 @@ class LinearEngine:
         col_new = self.col
         rows = []
         liftlms = []
-        for qe, i in quotients:
-            liftlm = tuple(q + s for q, s in zip(qe, syzlm_exps[i]))
-            # if filt is not None and liftlm not in filt:
-            #     continue
+        for qe, i, liftlm in _selected_lifts(self.U, deg):
             T, C = syz_np[i]
             shifted = (T + np.array(qe, dtype=np.int64)).tolist()
             row = {}
@@ -535,15 +559,19 @@ class LinearEngine:
         self.compute_basis_U(r - 1, q + U.deg)
         rels = self.elementary_reduction_step(self.basisWdown[(r - 1, q + U.deg)])
         inputs = [row for row, _ in self.basis_U[(r - 1, q)]] + rels
-        # if r == 2 and U.record_profile:
-        #     new, piv = self.echelonize(inputs, want_pivots=True)
-        #     off = len(self.basis_U[(r - 1, q)])
-        #     liftlms = self.wdown_liftlms.get((r - 1, q + U.deg), [])
-        #     for i in piv:
-        #         if i >= off and i - off < len(liftlms):
-        #             U.used_syzlms.add(liftlms[i - off])
-        # else:
-        new = self.echelonize(inputs) # TODO: When you uncomment the above, indent this so it's in the else.
+        if r == 2 and U.record_profile:
+            # Record which syzygy staircase lifts contribute pivots, as in
+            # ``basis_U``: the i-th relation is the image of the i-th lift,
+            # and the pivot rows of the inputs single out a subset of lifts
+            # spanning the same space X^2_q.
+            new, piv = self.echelonize(inputs, want_pivots=True)
+            off = len(self.basis_U[(r - 1, q)])
+            liftlms = self.wdown_liftlms.get((r - 1, q + U.deg), [])
+            for i in piv:
+                if i >= off and i - off < len(liftlms):
+                    U.used_syzlms.add(liftlms[i - off])
+        else:
+            new = self.echelonize(inputs)
         basis_q = []
         wdown = []
         for row, pc in new:
@@ -627,8 +655,6 @@ def engine_gauss_manin_helper(U, der, L, ret=None):
     This is an internal function for sage_periods, and is not meant to be
     called by the user.
     """
-    from .rham_koszul import RKGaussManinData
-
     eng = U.eng
     if eng is None:
         eng = LinearEngine(U)
@@ -695,14 +721,16 @@ def engine_gauss_manin_helper(U, der, L, ret=None):
 
     nb = len(basis)
     xindex = {e: i for i, e in enumerate(basis)}
-    gm_entries = {}
-    for j, row in enumerate(gmx):
-        for e, v in row.items():
-            gm_entries[(xindex[e], j)] = v
-    ret.gm = matrix(F, nb, nb, gm_entries)
-    proj_entries = {}
-    for j, row in enumerate(projx):
-        for e, v in row.items():
-            proj_entries[(xindex[e], j)] = v
-    ret.proj = matrix(F, nb, len(L), proj_entries)
+
+    def coefficient_matrix(images):
+        # Dense, like the polynomial implementation's output.  Filling a zero
+        # dense matrix entry by entry is much faster than the dict constructor.
+        out = matrix(F, nb, len(images), sparse=False)
+        for j, row in enumerate(images):
+            for e, v in row.items():
+                out[xindex[e], j] = v
+        return out
+
+    ret.gm = coefficient_matrix(gmx)
+    ret.proj = coefficient_matrix(projx)
     return ret

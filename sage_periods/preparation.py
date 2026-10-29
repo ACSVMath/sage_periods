@@ -6,7 +6,7 @@ from .pipeline import compute_gauss_manin_connection, compute_reductions_depende
 from .errors import *
 from .profiling import ProfileData
 from .reconstruction import reconstruction_degree_hint
-from .rham_koszul import _staircase_cache
+from .syzygy_lifts import _staircase_cache
 
 from sage.misc.verbose import verbose
 import multiprocessing
@@ -467,5 +467,4 @@ def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None,
                 return None
 
             raise
-
 
