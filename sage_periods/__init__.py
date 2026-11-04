@@ -22,9 +22,15 @@ from .picard_fuchs import (
     compute_diagonal_annihilator
 )
 
+from .certificates import (PeriodCertificate,verify_certificate)
+
 __all__ = [
     "compute_homogenization",
     "compute_prepared_fraction",
     "compute_period_annihilator",
     "compute_diagonal_annihilator",
+    "PeriodCertificate",
+    "verify_certificate"
 ]
+
+# TODO for v0.2.0: Add "minimize", for a general series guessing routine, to the user-level API?

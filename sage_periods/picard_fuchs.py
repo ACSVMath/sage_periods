@@ -264,9 +264,6 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
         if R.parent() == SR:
             assert t.parent() == SR, "If R is symbolic, then t must be a symbolic ring element as well."
     vari = [v for v in R.variables() if v != t]
-    # # Normalize space variables -- just in case they're not from a diagonal.
-    # vari_normalized = list(SR.var("sage_periods_x", len(vari)))
-    # R_normalized = R.subs({old:new for (old,new) in zip(vari,vari_normalized)}) # This might not be necessary, here.
     
     # Define base field and set up variables
     F = QQ  # TODO: Add Possiblity of working over algebraically defined coefficients.
