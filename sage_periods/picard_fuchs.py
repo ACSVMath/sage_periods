@@ -11,9 +11,12 @@ from sage.all import *
 from .diagonal import minimize_diagonal_annihilator, diagonal_to_period, normalize_diagonal_arguments
 from .preparation import compute_homogenization, compute_prepared_fraction, minimize_denominator_degree, probe_reduction_order
 from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, prepare_coefficient_data
-from .reconstruction import CRTLifter, operator_residues, operator_from_lift, reconstruction_degree_hint
+from .reconstruction import (CRTLifter, operator_residues, operator_from_lift,
+                             operator_residue_count, ratfun_residues,
+                             ratfuns_from_lift, reconstruction_degree_hint)
 from .errors import *
 from .profiling import ProfileData
+from .certificates import PeriodCertificate, verify_certificate
 
 # Check if ore_algebra is available, and import it if so
 from . import _is_ore_algebra_installed
@@ -44,8 +47,9 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
       ``minimize=True``, this certifies that the output annihilates
       the diagonal and is a right divisor of the operator computed when 
       ``minimize`` is set to ``False``.
-    * ``certify`` -- Reserved for partial certificates; ``True`` currently raises
-      ``NotImplementedError``.
+    * ``certify`` -- If ``True``, return an operator and its verified partial certificate.
+      With ``minimize=True``, the partial certificate proves the original operator;
+      the minimization routine verifies the returned right divisor separately.
     * ``minimize_denom_deg`` -- (Optional) Torus change-of-variables preprocessing
       lowering the denominator degree (see ``compute_period_annihilator``); can
       greatly speed up computation. ``None`` (default) and ``True`` both apply it
@@ -141,9 +145,8 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
         G, t, Dt, reduction_order=reduction_order, certify=certify,
         minimize_denom_deg=minimize_denom_deg, ncpus=ncpus,
         ensure_termination=ensure_termination)
-    # TODO: Add capability for returning certificate.
-
-    # TODO: Add routine for verifying computed certificate.
+    if certify:
+        L, cert = L
 
     # Clear symbolic variables that we created in normalize_diagonal_arguments.
     for v in vari_normalized:
@@ -156,9 +159,10 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
         Ring_min = PolynomialRing(QQ,Rvars).fraction_field()
         P = Ring_min(R_normalized).numerator()
         Q = Ring_min(R_normalized).denominator()
-        return minimize_diagonal_annihilator(L,P,Q,r,L.parent().base_ring().gen(),ncpus=ncpus)
+        minimized = minimize_diagonal_annihilator(L,P,Q,r,L.parent().base_ring().gen(),ncpus=ncpus)
+        return (minimized, cert) if certify else minimized
     else:
-        return L
+        return (L, cert) if certify else L
 
     
 def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False, minimize_denom_deg = None, ncpus = 1, ensure_termination=False):
@@ -173,8 +177,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     * ``Dt`` -- A string used to name the operator for differentiation with respect to ``t``.
     * ``reduction_order`` -- (Optional) The smallest order to start computing the modular Lairez reduction at. When ``None`` is passed in, a small order is selected
      which is likely to give the best combination of small operator size and small runtime.
-    * ``certify`` -- Reserved for partial certificates; ``True`` currently raises
-      ``NotImplementedError``.
+    * ``certify`` -- If ``True``, return an operator and its verified partial certificate.
     * ``minimize_denom_deg`` -- (Optional) Torus (monomial) change of variables lowering the 
       denominator degree before the reduction pipeline. ``None`` (default): walk
       only over the variables $x_i$ dividing the denominator of ``R``; then the
@@ -243,8 +246,6 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
 
     """
 
-    if certify:
-        raise NotImplementedError("Period certificates are not implemented yet.")
     verbose(f"Computing operator annihilating residue of {R}", level=1)
     
     '''
@@ -346,8 +347,8 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             # Start from the probe's operator (if any): it was computed at this same r,
             # so is valid.
             lifter = CRTLifter()
-            Lp_coeffs_dict = set(seed)
-            for sp, sc in seed.items():
+            Lp_coeffs_dict = set() if certify else set(seed) # When certifying, we can't include a seed because it throws off later computations.
+            for sp, sc in (() if certify else seed.items()):
                 try:
                     sshape, sints = operator_residues(sc)
                 except BadPrimeError:
@@ -387,9 +388,13 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 #######################################################################################
                 try:
                     # NOTE: This function modifies profile in place
-                    rho0, M, B = compute_gauss_manin_connection(
+                    stage1 = compute_gauss_manin_connection(
                         a, f, r, p, profile=profile, degree_hint=degree_hint,
-                        coefficient_data=coefficient_data)
+                        coefficient_data=coefficient_data, certify=certify)
+                    if certify:
+                        rho0, M, B, cofactors = stage1
+                    else:
+                        rho0, M, B = stage1
                 except BadPrimeError:
                     bad_primes.append(p)
                     continue
@@ -398,24 +403,31 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                     raise e
                 
                 if degree_hint is None:
-                    degree_hint = reconstruction_degree_hint(rho0, B)
+                    if certify:
+                        flat = [c for cofactor in cofactors for c in cofactor.values()]
+                        certmat = matrix(rho0.base_ring(), len(flat), 1, flat)
+                        degree_hint = reconstruction_degree_hint(rho0, B, certmat)
+                    else:
+                        degree_hint = reconstruction_degree_hint(rho0, B)
 
                 # If we get a trivial basis, then we're done.
-                if len(M) == 0 or rho0.nrows() == 0:
-                    return Alg(1)
+                if not M:
+                    if not certify:
+                        return Alg(1)
+                    Lp_coeffs_denoms_cleared = [PolynomialRing(GF(p), str(t)).one()]
+                else:
+                    ###############################################################################################
+                    # STAGE 2: Use matrix formula for rho[i] to compute a dependency among the rho[i].
+                    # Note that compute_reductions_dependency returns ALL coeffs up to m, with cleared denominators.
+                    # (in particular this means rho[m] won't usually have 1 as its leading coeff, so our operator isn't monic.)
+                    ###############################################################################################
+                    verbose("Computing linear relation... ",level=1)
+                    try:
+                        Lp_coeffs_denoms_cleared = compute_reductions_dependency(rho0,B,ensure_termination=ensure_termination)
+                    except BadPrimeError:
+                        bad_primes.append(p)
+                        continue
                     
-                ###############################################################################################
-                # STAGE 2: Use matrix formula for rho[i] to compute a dependency among the rho[i].
-                # Note that compute_reductions_dependency returns ALL coeffs up to m, with cleared denominators.
-                # (in particular this means rho[m] won't usually have 1 as its leading coeff, so our operator isn't monic.)
-                ###############################################################################################
-                verbose("Computing linear relation... ",level=1)
-                try:
-                    Lp_coeffs_denoms_cleared = compute_reductions_dependency(rho0,B,ensure_termination=ensure_termination)
-                except BadPrimeError:
-                    bad_primes.append(p)
-                    continue
-                
                 Lp_coeffs_dict.add(p)
                 
                 # At this point, we have a list of coeffs for our forms rho[i], evaluated in F_p(t), constituting an operator L_p over F_p(t)
@@ -429,10 +441,31 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 except BadPrimeError:
                     bad_primes.append(p)
                     continue
-                lifter.fold(p, ints, shape)
+                if certify:
+                    # If certificates present, also fold certificate data into CRT lift.
+                    basis_sig = tuple(tuple(m.exponents(False)[0]) for m in M)
+                    supports = tuple(tuple(sorted(d)) for d in cofactors)
+                    cert_entries = list(rho0.list()) + list(B.list()) + [
+                        d[e] for d, support in zip(cofactors, supports) for e in support]
+                    cert_shape, cert_ints = ratfun_residues(cert_entries)
+                    lifter.fold(p, ints + cert_ints,
+                                (shape, basis_sig, supports, cert_shape))
+                else:
+                    lifter.fold(p, ints, shape)
                 try:
+                    # Try to lift operator and see if the result is valid, both versions (cert and not)
                     majority_shape, values, majority_primes = lifter.lift_majority()
-                    L_coeffs = operator_from_lift(t, majority_shape, values)
+                    if certify:
+                        op_shape, basis_sig, supports, cert_shape = majority_shape
+                        noperator = operator_residue_count(op_shape)
+                        L_coeffs = operator_from_lift(t, op_shape, values[:noperator])
+                        lifted_cert_entries = ratfuns_from_lift(
+                            t, cert_shape, values[noperator:])
+                        lift_result = (tuple(L_coeffs), tuple(lifted_cert_entries),
+                                       basis_sig, supports)
+                    else:
+                        L_coeffs = operator_from_lift(t, majority_shape, values)
+                        lift_result = L_coeffs
                 except NeedMorePrimesError:
                     L_coeffs = None
 
@@ -449,14 +482,14 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                     continue
 
                 # Check to see if L_coeffs has been assigned in L_recon_buckets and if it equals this value (stability)
-                if (L_recon_candidate is not None and L_recon_candidate == L_coeffs
+                if (L_recon_candidate is not None and L_recon_candidate == lift_result
                         and majority_shape == candidate_shape
                         and candidate_primes < majority_primes):
                     # We take this as the reconstructed operator having stabilized
                     # Break and return the operator
                     break
                 else:
-                    L_recon_candidate = L_coeffs
+                    L_recon_candidate = lift_result
                     candidate_shape, candidate_primes = majority_shape, majority_primes
                     continue
             
@@ -464,6 +497,28 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             # Build operator then return it.
             m = len(L_coeffs)
             deq = Alg(L_coeffs[m-1]*Dt**(m-1) - sum([L_coeffs[k]*(Dt**k) for k in range(m-1)]))
+            if certify:
+                # Build and verify the certificate.
+                _, lifted_cert_entries, basis_sig, supports = lift_result
+                nbasis = len(basis_sig)
+                Kt = a.parent().base_ring()
+                rho0_Q = list(lifted_cert_entries[:nbasis])
+                B_Q = matrix(Kt, nbasis, nbasis,
+                             list(lifted_cert_entries[nbasis:nbasis + nbasis**2]))
+                flat = lifted_cert_entries[nbasis + nbasis**2:]
+                reconstructed = []
+                offset = 0
+                for support in supports:
+                    reconstructed.append({e: flat[offset + i]
+                                          for i, e in enumerate(support)})
+                    offset += len(support)
+                cert = PeriodCertificate(
+                    a=a, f=f, basis_exponents=basis_sig, rho0=rho0_Q,
+                    B=B_Q, beta0=reconstructed[0], gammas=reconstructed[1:],
+                    operator_coefficients=list(deq.list()))
+                if not verify_certificate(cert):
+                    raise RuntimeError("Reconstructed partial certificate failed exact verification.")
+                deq = (deq, cert)
         except ReductionOrderTooSmallError as e:
             r += 1
             # Reset profile and seeded operator because they belong to the previous r.

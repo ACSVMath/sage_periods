@@ -4,8 +4,6 @@ from typing import NamedTuple
 
 from sage.matrix.constructor import Matrix
 
-# TODO: Do we see significant speedups from just using the named pairs directly? Why not do that?
-# ALSO, SHOULDN'T THIS CLASS BE PLACED 
 class ReducedElement(NamedTuple):
     """Value and cofactor in ``U.xring``; ``None`` means untracked."""
     value: object
@@ -14,19 +12,16 @@ class ReducedElement(NamedTuple):
 
 def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     r"""
-    Return a (reduced) echelonized basis for the span of a list of polynomials or ``ReducedElements``.
+    Return a (reduced) echelonized basis for a list of ``ReducedElement`` objects.
     That is:
-    * For polynomials, return a basis $B$ for span$_{\mathbb{K}}(L)$ such that for each $b \in B$ the leading monomial 
-    of $b$ doesn't appear with nonzero coefficient in any other leading monomials of elements of $B$.
     * For ``ReducedElement`` objects, use only the ``value`` columns as pivots,
       while applying row operations to both components.
 
     INPUT:
 
-    * ``L`` -- A list of elements of a multivariate polynomial ring ``A`` over a field ``K``,
-        or a list of ``ReducedElement`` objects.
+    * ``L`` -- A list of ``ReducedElement`` objects.
     * ``return_matrix`` -- (Optional) Boolean. If ``True``, return their 
-        coefficient matrix (value columns first) instead of poly/``ReducedElement`` list.
+        coefficient matrix (value columns first) instead of the element list.
     * ``return_pivot_rows`` -- (Optional) Boolean If ``True``, Return 
         the input rows that pivot in the value block.
 
@@ -36,7 +31,7 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
       reduction pipeline this is ``U.xring = GF(p)[u,v,x_0,...]``.
     * A tracked cofactor is an encoded n-form in that same ring, not a list
       of coefficients in the original polynomial ring.
-    * Inputs are all polynomials or all ``ReducedElement`` objects.
+    * Inputs are all ``ReducedElement`` objects.
 
     OUTPUT:
 
@@ -47,18 +42,15 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     This is an internal function for sage_periods, and is not 
     meant to be called by the user.
     """
-    # Plain polynomials remain supported by the existing reduction pipeline.
     # A ReducedElement with cofactor=None uses the same value-only matrix.
     if not L:
         return ([], []) if return_pivot_rows else []
-    # Input processing to distinguish between polys and pairs.
-    paired = isinstance(L[0], ReducedElement)
-    if any(isinstance(item, ReducedElement) != paired for item in L):
-        raise TypeError("All inputs must be polynomials or all ReducedElement objects.")
-    values = [item.value for item in L] if paired else L
-    cofactors = [item.cofactor for item in L] if paired else None
-    tracked = paired and cofactors[0] is not None
-    if paired and any((c is not None) != tracked for c in cofactors):
+    if any(not isinstance(item, ReducedElement) for item in L):
+        raise TypeError("All inputs must be ReducedElement objects.")
+    values = [item.value for item in L]
+    cofactors = [item.cofactor for item in L]
+    tracked = cofactors[0] is not None
+    if any((c is not None) != tracked for c in cofactors):
         raise ValueError("Cofactors must either all be present or all be None.")
     A = values[0].parent()
     if any(p.parent() != A for p in values) or \
@@ -118,12 +110,9 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
         if not nz or nz[0] >= len(exps):
             break  # A cofactor-only row supplies no reduction direction.
         value = A({exps[j]: row[j] for j in nz if j < len(exps)})
-        if paired:
-            cofactor = (A({cofactor_exps[j - len(exps)]: row[j]
-                           for j in nz if j >= len(exps)}) if tracked else None)
-            out.append(ReducedElement(value, cofactor))
-        else:
-            out.append(value)
+        cofactor = (A({cofactor_exps[j - len(exps)]: row[j]
+                       for j in nz if j >= len(exps)}) if tracked else None)
+        out.append(ReducedElement(value, cofactor))
     return (out, piv) if return_pivot_rows else out
 
 
@@ -131,34 +120,22 @@ def linear_normal_form_p(L0, M, reduce):
     r"""
     Cancel an echelon basis's pivot monomials in each target.
 
-    ``L0`` and ``M`` contain polynomials or ``ReducedElement`` objects of the
-    same kind. For paired input, value coefficients determine each subtraction
-    and the same subtraction is applied to cofactors. If ``reduce`` is true,
+    ``L0`` and ``M`` contain ``ReducedElement`` objects of the same cofactor
+    mode. Value coefficients determine each subtraction and the same
+    subtraction is applied to cofactors. If ``reduce`` is true,
     echelonize the residual family before returning it.
     """
     L = L0
-    paired = bool(L) and isinstance(L[0], ReducedElement)
-    if paired:
-        tracked = L[0].cofactor is not None
-        if any(not isinstance(p, ReducedElement) or (p.cofactor is not None) != tracked
-               for p in L) or any(not isinstance(p, ReducedElement) or
-                                  (p.cofactor is not None) != tracked for p in M):
-            raise ValueError("L0 and M must have the same cofactor mode.")
-        for m in M:
-            pivot = m.value.lm()
-            for i, p in enumerate(L):
-                c = p.value.monomial_coefficient(pivot)
-                if c:
-                    cofactor = p.cofactor - c*m.cofactor if tracked else None
-                    L[i] = ReducedElement(p.value - c*m.value, cofactor)
-    else:
-        # Successively cancel the pivot monomial of each row of M in all targets.
-        for m in M:
-            pivot = m.lm()
-            for i in range(len(L)):
-                c = L[i].monomial_coefficient(pivot)
-                if c:
-                    L[i] -= c*m
+    if not L:
+        return []
+    tracked = L[0].cofactor is not None
+    for m in M:
+        pivot = m.value.lm()
+        for i, p in enumerate(L):
+            c = p.value.monomial_coefficient(pivot)
+            if c:
+                cofactor = p.cofactor - c*m.cofactor if tracked else None
+                L[i] = ReducedElement(p.value - c*m.value, cofactor)
 
     if reduce:
         L = echelonized_basis_poly(L, False)

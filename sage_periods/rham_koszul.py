@@ -11,9 +11,8 @@ from sage.matrix.constructor import matrix
 from sage.structure.element import parent
 
 
-from .poly_lin_alg import echelonized_basis_poly, linear_normal_form_p
+from .poly_lin_alg import ReducedElement, echelonized_basis_poly, linear_normal_form_p
 from .errors import ReductionOrderTooSmallError
-from .linear_closure import engine_gauss_manin_helper
 
 
 # For RhamKoszulData object.
@@ -60,6 +59,7 @@ class RhamKoszulData:
     basis_U: dict = field(default_factory=dict)
     vars: list = field(default_factory=list)
     r: int | Integer = 1
+    certify: bool = False
     gens: list = field(default_factory=list)
     u: object | None = None
     v: object | None = None
@@ -89,7 +89,7 @@ class RhamKoszulData:
     filtered_quotients: dict = field(default_factory=dict)
     staircase_keys: object | None = None
 
-    def __init__(self,f,r=1,profile=None,staircase_keys=None):
+    def __init__(self,f,r=1,profile=None,staircase_keys=None,certify=False):
         r"""
         Initialise the Rham-Koszul reduction context attached to a homogeneous polynomial $f$.
 
@@ -112,6 +112,7 @@ class RhamKoszulData:
     
         self.f=f
         self.r=r
+        self.certify=certify
         self.dim=parent(f).ngens()
         self.ring=parent(f)
         self.basis_U={}
@@ -218,6 +219,8 @@ class RKGaussManinData:
     ebasis: list = field(default_factory=list)
     proj: object | None = None
     gm: object | None = None
+    proj_cofactors: list = field(default_factory=list)
+    gm_cofactors: list = field(default_factory=list)
 
 
 '''
@@ -502,12 +505,13 @@ def elementary_reduction_step(U, L0):
     INPUT:
 
     * ``U`` -- A ``RhamKoszulData`` object containing the encoded Jacobian data.
-    * ``L0`` -- A Python list of encoded polynomials in ``U.xring`` to be reduced in batch.
+    * ``L0`` -- A Python list of encoded polynomials or ``ReducedElement`` pairs in
+      ``U.xring`` to be reduced in batch.
 
     OUTPUT:
 
-    * ``L`` -- A Python list of encoded polynomials obtained after one batched
-      Griffiths-Dwork reduction step.
+    * ``L`` -- A list in the same format after one batched Griffiths-Dwork
+      reduction step.
 
     EXAMPLES:
 
@@ -544,11 +548,19 @@ def elementary_reduction_step(U, L0):
     if len(L0) == 0:
         return L0
 
+    paired = isinstance(L0[0], ReducedElement)
+    values = [p.value for p in L0] if paired else L0
     if U.r >1: # Should we batch in Singular, or just do 1-by-1 in sage?
-        L = ff.reduce(U.xring.ideal(L0),U.jac)
+        L = ff.reduce(U.xring.ideal(values),U.jac)
     else:
-        L = [p.reduce(U.jac) for p in L0]
-    return [exterior_derivative(U, p) for p in L]
+        L = [p.reduce(U.jac) for p in values]
+    if not paired:
+        return [exterior_derivative(U, p) for p in L]
+    tracked = L0[0].cofactor is not None
+    return [ReducedElement(exterior_derivative(U, nf),
+                           old.cofactor + nf - nf.coefficient({U.v: 0})
+                           if tracked else None)
+            for old, nf in zip(L0, L)]
 
 
 '''
@@ -598,7 +610,7 @@ def basis_U(U, r, q):
             sage: U.basis_U[(1, 4)]
             []
             sage: U.basisWdown[(1, 4)]
-            [0]
+            [ReducedElement(value=0, cofactor=None)]
             
 
     A trivial example.
@@ -629,7 +641,9 @@ def basis_U(U, r, q):
         # Base case: X^1_q = d A_{q-1}.  The non-trivial syzygies supply the A-part,
         # and cast_syzygies applies d in the chosen representation mode.
         syz, liftlms = _basis_syzygies_with_lms(U, q - U.deg)
-        U.basisWdown[(r, q)] = [exterior_derivative(U, p) for p in syz] # cast_syzygies, in the r=1 case.
+        U.basisWdown[(r, q)] = [ReducedElement(
+            exterior_derivative(U, p), p if U.certify else None)
+            for p in syz] # cast_syzygies, in the r=1 case.
         U.wdown_liftlms[(r, q)] = liftlms
         U.basis_U[(r, q)] = []
         return None
@@ -662,7 +676,7 @@ def basis_U(U, r, q):
             new = echelonized_basis_poly(inputs, return_matrix=False)
 
         # Split the resulting echelon basis into the exact-degree-q pivot part and the strict lower-degree tail.
-        U.basis_U[(r, q)], U.basisWdown[(r, q)] = [p for p in new if p.degree() == q], [p for p in new if p.degree() < q]
+        U.basis_U[(r, q)], U.basisWdown[(r, q)] = [p for p in new if p.value.degree() == q], [p for p in new if p.value.degree() < q]
         return None
 
 
@@ -676,17 +690,19 @@ def _hom_reduce_helper(U, L, r):
     INPUT:
 
     * ``U`` -- A ``RhamKoszulData`` object carrying the cached reduction data.
-    * ``L`` -- A mutable Python list of encoded polynomials in ``U.xring``. It is modified in place.
+    * ``L`` -- A mutable list of encoded ``ReducedElement`` pairs in ``U.xring``.
+      It is modified in place.
     * ``r`` -- A positive integer specifying the order of the higher reduction.
 
     OUTPUT:
 
-    * ``None`` -- No direct return value. The list ``L`` is rewritten in place by its reduced encoded representatives.
+    * ``None`` -- No direct return value. The list ``L`` is rewritten in place by
+      its reduced encoded representatives.
     """
     if len(L) == 0:
         return None
 
-    q = ZZ(max(p.degree() for p in L)) # compute_weight
+    q = ZZ(max(p.value.degree() for p in L)) # compute_weight
     while q > 0:
         # First apply one Griffiths-Dwork reduction step to the whole batch.
         newL = elementary_reduction_step(U, list(L))
@@ -762,12 +778,18 @@ def hom_reduce(U, L, r):
     if Sequence(list(L)).universe() != U.ring:
         raise TypeError("Bad argument type")
 
-    # Switch to the encoded model, reduce there, then decode back.
-    enc = [U.tox(p) * U.gens[0] for p in list(L)] 
-    _hom_reduce_helper(U, enc, r)
-    L[:] = [U.fromx(p) for p in enc] 
+    L[:] = [p.value for p in _reduced_elements(U, L, r)]
 
     return None
+
+
+def _reduced_elements(U, polynomials, r):
+    """Reduce ordinary polynomials and retain their encoded cofactors."""
+    enc = [ReducedElement(U.tox(p) * U.gens[0],
+                          U.xring.zero() if U.certify else None)
+           for p in polynomials]
+    _hom_reduce_helper(U, enc, r)
+    return [ReducedElement(U.fromx(p.value), p.cofactor) for p in enc]
 
 
 def gauss_manin_helper(U, der, L, ret=None):
@@ -845,31 +867,17 @@ def gauss_manin_helper(U, der, L, ret=None):
             []
             
     """
-    # Over a prime finite field (the modular pipeline) the closure at
-    # reduction order >= 2 runs on the linearized engine, which performs
-    # the identical computation -- same normal forms, same pivot ordering,
-    # same caps -- on coefficient rows instead of polynomials.  At r = 1
-    # the closure is a plain chain of Griffiths-Dwork steps with no
-    # echelonizations, where the per-point setup of the engine costs more
-    # than it saves, so the polynomial implementation is kept there, as it
-    # is for all other base rings (and everywhere when
-    # SAGE_PERIODS_DISABLE_ENGINE=1 is set).
-    # base = U.ring.base_ring()
-    # if U.r >= 2 and base.is_finite() and base.is_prime_field():
-    #     # TODO: Add a way for the user to disable this as a global setting.
-    #     # Perhaps with a "context manager" class, like in Sage ACSV?
-    #     return engine_gauss_manin_helper(U, der, L, ret=ret)
-
+    # IF you ever decide to bring back linear_closure.py, this would be
+    # the correct place for entrypoint into its version of gauss_manin_helper
     basis = []
     basis_set = set()
     gm = []
 
     # Reduce the initial generators and extract the monomials supporting them.
-    proj = list(L)
-    hom_reduce(U, proj, U.r)
+    proj = _reduced_elements(U, L, U.r)
     verbose("Initial proj after hom_reduce:",level=1)
     verbose(proj,level=1)
-    xmons = list(set().union(*(set(p.monomials()) for p in proj))) if proj else []
+    xmons = list(set().union(*(set(p.value.monomials()) for p in proj))) if proj else []
 
     while len(xmons) > 0:
         # Add the current frontier of monomials to the basis.
@@ -886,19 +894,19 @@ def gauss_manin_helper(U, der, L, ret=None):
         nf = [-der * p for p in xmons]
         verbose("nf: ",level=1)
         verbose(nf,level=1)
-        hom_reduce(U, nf, U.r)
+        nf = _reduced_elements(U, nf, U.r) # We want cofactors too, hence why we don't call hom_reduce.
         verbose("hom_reduced nf:",level=1)
         verbose(nf,level=1)
         gm.extend(nf)
 
         # If the reduced images exceed the expected degree bound, then r was too
         # small for the higher reduction to have stabilised.
-        if max(p.degree() for p in nf) > (U.dim - 1) * U.deg:
+        if max(p.value.degree() for p in nf) > (U.dim - 1) * U.deg:
             raise ReductionOrderTooSmallError("Degree condition met! Raise r",U.r)
 
         # Continue with the newly discovered monomials, exactly as in the monomial
         # closure construction of M in Algorithm 4 of Lairez 2016.
-        newmons = set().union(*(set(p.monomials()) for p in nf))
+        newmons = set().union(*(set(p.value.monomials()) for p in nf))
         xmons = list(newmons.difference(basis_set))
         verbose("xmons after subtracting against basis:",level=1)
         verbose(xmons,level=1)
@@ -911,12 +919,15 @@ def gauss_manin_helper(U, der, L, ret=None):
     def coefficient_matrix(images):
         out = matrix(U.ring.base_ring(), len(basis), len(images), sparse=False)
         for j, image in enumerate(images):
-            for e, c in image.dict().items():
+            for e, c in image.value.dict().items():
                 out[index[e], j] = c
         return out
 
     ret.gm = coefficient_matrix(gm)
     ret.proj = coefficient_matrix(proj)
+    # Also return cofactor basis and matrix
+    ret.proj_cofactors = [p.cofactor for p in proj]
+    ret.gm_cofactors = [p.cofactor for p in gm]
 
     ret.ebasis = tuple(tuple(m.exponents(False)) for m in basis)
     return ret

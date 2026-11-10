@@ -394,9 +394,9 @@ def recon_add_rat(H,val,point,xkey):
     return
 
 
-def reconstruction_degree_hint(rho0, B):
+def reconstruction_degree_hint(*matrices):
     """Sample-count estimate; acceptance still requires reconstruction stability."""
-    entries = [c for c in rho0.list() + B.list() if c]
+    entries = [c for M in matrices for c in M.list() if c]
     degsum = max((c.numerator().degree() + c.denominator().degree()
                   for c in entries), default=0)
     den = lcm([c.denominator() for c in entries]) if entries else 1
@@ -567,3 +567,31 @@ def operator_residue_count(shape):
     r"""Number of residues described by an ``operator_residues`` shape."""
     _, degs = shape
     return sum(d + 1 for d in degs if d >= 0)
+
+
+def ratfun_residues(entries):
+    """Encode rational functions over GF(p)(t) for coherent CRT lifting."""
+    shape, residues = [], []
+    for x in entries:
+        num, den = x.numerator(), x.denominator()
+        lc = den.leading_coefficient()
+        num, den = num / lc, den / lc
+        dn, dd = num.degree(), den.degree()
+        shape.append((dn, dd))
+        residues.extend(ZZ(num[k]) for k in range(dn + 1))
+        residues.extend(ZZ(den[k]) for k in range(dd + 1))
+    return tuple(shape), residues
+
+
+def ratfuns_from_lift(t, shape, values):
+    """Decode rational functions lifted from ``ratfun_residues`` data."""
+    R = PolynomialRing(QQ, str(t))
+    K = R.fraction_field()
+    out, offset = [], 0
+    for dn, dd in shape:
+        num = R(values[offset:offset + dn + 1]) if dn >= 0 else R.zero()
+        offset += max(dn + 1, 0)
+        den = R(values[offset:offset + dd + 1])
+        offset += dd + 1
+        out.append(K(num) / K(den))
+    return out

@@ -19,7 +19,7 @@ def prepare_coefficient_data(a, f):
 
 
 # Stage 1
-def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,staircase_keys=None,coefficient_data=None):
+def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,staircase_keys=None,coefficient_data=None,certify=False):
     r"""
     Compute the Gauss-Manin matrix $B$ for the map defined by closing $\rho_0$ under the map $\rho \mapsto [f^\delta \rho]_r$,
     as described in Section 7.2 of Lairez 2016. Also returns the basis for the space and the projection of $a$ into this space.
@@ -131,7 +131,7 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
             continue
             
         # Build our RhamKoszulData object with evaluated f
-        U = RhamKoszulData(feval,r=r,profile=profile,staircase_keys=staircase_keys)
+        U = RhamKoszulData(feval,r=r,profile=profile,staircase_keys=staircase_keys,certify=certify)
         
         # Run gauss_manin_helper on <fteval,[aeval]>, with our prime and r
         try:
@@ -150,6 +150,12 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
         # is armed once two consecutive candidates agree.
         if U.record_profile:
             profile.add_profile_candidate(U.profile_candidate(), p)
+            if certify and profile.state == "armed":
+                # The filtered reduction has the same values but can choose
+                # different cofactors, so start its interpolation afresh.
+                H.reset()
+                H.first_tick = degree_hint
+                continue
 
         # Extract results and add to interpolation routine. Proj is the |M| x 1 matrix expressing rho_0' in terms of M
         basis_key = ret.ebasis #gauss_manin_helper should return a tuple of tuples of tuples
@@ -158,10 +164,28 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
         basis = ret.basis
 
         # Feed to interpolation manager
-        recon_add_rat(H,(rho0_eval,B_prime),u_K,basis_key) # Both rho0 and B are matrices
+        if certify:
+            cofactor_dicts = [c.dict() for c in ret.proj_cofactors + ret.gm_cofactors]
+            supports = tuple(tuple(sorted(d)) for d in cofactor_dicts)
+            entries = [d[e] for d, support in zip(cofactor_dicts, supports)
+                       for e in support]
+            cofactor_matrix = matrix(F, len(entries), 1, entries)
+            recon_add_rat(H, (rho0_eval, B_prime, cofactor_matrix), u_K,
+                          (basis_key, supports))
+        else:
+            recon_add_rat(H,(rho0_eval,B_prime),u_K,basis_key) # Both rho0 and B are matrices
 
         # Stability is handled by recon_add_rat, we just need to check if candidate has been assigned
         if H.candidate is not None:
+            if certify:
+                values = H.candidate[2].list()
+                offset = 0
+                reconstructed = []
+                for support in supports:
+                    reconstructed.append({e: values[offset + i]
+                                          for i, e in enumerate(support)})
+                    offset += len(support)
+                return H.candidate[0], basis, H.candidate[1], reconstructed
             return H.candidate[0], basis, H.candidate[1] # rho0, M, B
         # Else, continue.
 

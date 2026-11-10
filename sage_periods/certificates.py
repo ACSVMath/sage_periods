@@ -12,7 +12,7 @@ class PeriodCertificate:
 
     Fields:
 
-    * ``a``, ``f`` -- the prepared homogeneous numerator and squarefree
+    * ``a``, ``f`` -- the prepared homogeneous numerator and
       denominator, as polynomials over $\QQ(t)$;
     * ``basis_exponents`` -- the exponent vectors of the monomial basis
       $\mathcal M$;
@@ -86,11 +86,16 @@ def verify_certificate(cert):
     def twisted_differential(encoded):
         """
         Take an encoded n-form and return the coefficient of D_f(form),
-        a topform. Assumes a valid encoded n-form is passed in.
+        a topform.
+
+        ***Assumes:
+         - a valid encoded n-form is passed in.
         """
         components = [A.zero()]*n
 
         for exponents, coefficient in encoded.items():
+            if not coefficient:
+                continue
             e = tuple(exponents)  # (u exponent, v exponent, x exponents )
             components[e[1] - 1] += A({e[2:]: K(coefficient)})
 
