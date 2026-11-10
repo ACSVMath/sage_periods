@@ -1,76 +1,69 @@
-r"""
-Small linear algebra utilities for free modules over an algebra.
+r"""Linear algebra on polynomials and their encoded cofactors."""
 
-These routines are intended to work with Sage's
-``CombinatorialFreeModule`` class and related structures.
-"""
+from typing import NamedTuple
+
 from sage.matrix.constructor import Matrix
 
+# TODO: Do we see significant speedups from just using the named pairs directly? Why not do that?
+# ALSO, SHOULDN'T THIS CLASS BE PLACED 
+class ReducedElement(NamedTuple):
+    """Value and cofactor in ``U.xring``; ``None`` means untracked."""
+    value: object
+    cofactor: object | None = None
 
-# Future: added option to return pivot rows -- (possibly useful for profile)
+
 def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     r"""
-    Return a (reduced) echelonized basis for the span of a list of polynomials.
-    That is, return a basis $B$ for span$_{\mathbb{K}}(L)$ such that for each $b \in B$ the leading monomial 
+    Return a (reduced) echelonized basis for the span of a list of polynomials or ``ReducedElements``.
+    That is:
+    * For polynomials, return a basis $B$ for span$_{\mathbb{K}}(L)$ such that for each $b \in B$ the leading monomial 
     of $b$ doesn't appear with nonzero coefficient in any other leading monomials of elements of $B$.
-
-    This is an internal function for sage_periods, and is not 
-    meant to be called by the user.
+    * For ``ReducedElement`` objects, use only the ``value`` columns as pivots,
+      while applying row operations to both components.
 
     INPUT:
 
-    * ``L`` -- A list of elements of a multivariate polynomial ring ``A`` over a field ``K``.
-    * ``return_matrix`` -- (Optional) A boolean with default value ``False``. 
+    * ``L`` -- A list of elements of a multivariate polynomial ring ``A`` over a field ``K``,
+        or a list of ``ReducedElement`` objects.
+    * ``return_matrix`` -- (Optional) Boolean. If ``True``, return their 
+        coefficient matrix (value columns first) instead of poly/``ReducedElement`` list.
+    * ``return_pivot_rows`` -- (Optional) Boolean If ``True``, Return 
+        the input rows that pivot in the value block.
 
     ASSUMPTIONS:
 
-    * All elements in ``L`` have the same parent ``A``, a polynomial ring.
+    * All values are in one polynomial ring over a field. In the modular
+      reduction pipeline this is ``U.xring = GF(p)[u,v,x_0,...]``.
+    * A tracked cofactor is an encoded n-form in that same ring, not a list
+      of coefficients in the original polynomial ring.
+    * Inputs are all polynomials or all ``ReducedElement`` objects.
 
     OUTPUT:
 
-    * A list of polynomials forming a basis for the $\mathbb{K}$-span of $L$ in
-      echelon form. If ``return_matrix`` is ``True`` then a pair
-      ``(basis, M)`` is returned, where ``M`` is the echelonized matrix
-      whose rows correspond to the basis elements.
+    * A list in the same format as the input, with values in echelon form.
+      With ``return_matrix=True``, return the coefficient matrix instead.
+      With ``return_pivot_rows=True``, also return the input pivot rows.
 
-    NOTES:
-
-    * ``L`` should consist of a list of vectors representing elements
-        in a finite-dimensional ``A``-module.
-    * The polynomial ring ``A`` should have grevlex order, which is
-        compatible with the TOP order on our ``A``-module extending ``grevlex``.
-
-    EXAMPLES:
-
-    A nontrivial example.
-
-            sage: var('t x0 x1 x2')
-            sage: p = 7
-            sage: A = PolynomialRing(GF(p),[x0,x1,x2])
-            sage: x = A.gens()
-            sage: f_arr = [ A.random_element() for i in range(5)]
-            sage: f_arr
-            [3*x0^2 + 2*x2^2 + 3*x0 - 2, -2*x0*x1 - 3*x1^2 - 3*x0*x2 - x2^2 - 3*x2, x0^2 - 3*x0*x1 - 3*x2^2 - x0, 3*x1^2 - 3*x0*x2 - 3*x2^2 + x0 - x1, -x0^2 - x0*x1 - x1*x2 + 3*x2^2 + x0]
-            sage: echelonized_basis_poly(f_arr,False)
-            [x0^2 + 3*x2^2 + x0 - 3, x0*x1 + 2*x2^2 + 3*x0 - 1, x1^2 - x2^2 - 2*x0 + x1 - 3*x2 - 2, x0*x2 - x1 - 3*x2 - 2, x1*x2 - x2^2 + 2*x0 - 3]
-                                                                                                                                                                                                                                        0                                                                                                                                                                                                                                   0                                                                                                                                                                                                                                   0                                                                                                                                                                                                                                   0                                                                                                                                                                                                                                   1                                                                                                                                                                                            (-3/224*t^2 - 57/14)/(t^2 + 3/7*t + 3/7)                                                                                                                                                                                                           3/7*t/(t^2 + 3/7*t + 3/7)                                                                                                                                                                                                   (3/7*t + 6/7)/(t^2 + 3/7*t + 3/7)                                                                                                                                                                                                 (-9/14*t + 3/7)/(t^2 + 3/7*t + 3/7)                                                                                                                                                                                                                                   0]
-
-    A trivial example.
-
-            sage: echelonized_basis_poly([],False)
-            []
-            sage: echelonized_basis_poly([A(0)],False)
-            []
-
-    !!! note
-
-            This method also works over $Q$, $Q(t)$, etc.
-        
+    This is an internal function for sage_periods, and is not 
+    meant to be called by the user.
     """
-    # Corner case / get A:
+    # Plain polynomials remain supported by the existing reduction pipeline.
+    # A ReducedElement with cofactor=None uses the same value-only matrix.
     if not L:
         return ([], []) if return_pivot_rows else []
-    A = L[0].parent()
+    # Input processing to distinguish between polys and pairs.
+    paired = isinstance(L[0], ReducedElement)
+    if any(isinstance(item, ReducedElement) != paired for item in L):
+        raise TypeError("All inputs must be polynomials or all ReducedElement objects.")
+    values = [item.value for item in L] if paired else L
+    cofactors = [item.cofactor for item in L] if paired else None
+    tracked = paired and cofactors[0] is not None
+    if paired and any((c is not None) != tracked for c in cofactors):
+        raise ValueError("Cofactors must either all be present or all be None.")
+    A = values[0].parent()
+    if any(p.parent() != A for p in values) or \
+            (tracked and any(c.parent() != A for c in cofactors)):
+        raise TypeError("Values and cofactors must belong to the same polynomial ring.")
 
     # Enumerate all exponent vectors appearing in ``L`` and order them
     # decreasingly with respect to the monomial order on ``A``.  Working with
@@ -78,104 +71,96 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     # CombinatorialFreeModule) lets us build the coefficient matrix straight
     # from the polynomial dictionaries.
     sortkey = A.term_order().sortkey
-    dictionaries = [p.dict() for p in L]
+    dictionaries = [p.dict() for p in values]
     exps = set()
     for coefficients in dictionaries:
         exps.update(coefficients)
     exps = sorted(exps, key=sortkey, reverse=True)
     index = {e: j for j, e in enumerate(exps)}
 
+    cofactor_dicts = [c.dict() for c in cofactors] if tracked else []
+    cofactor_exps = sorted({e for d in cofactor_dicts for e in d},
+                           key=sortkey, reverse=True)
+    cofactor_index = {e: len(exps) + j for j, e in enumerate(cofactor_exps)}
+
     # Build the coefficient matrix and take RREF; this gives an echelonized
     # basis in coordinates.  Over GF(p) this uses fast native linear algebra.
     # Fill a zero dense matrix entry by entry: much faster than passing a dict
     # to the Matrix constructor.
-    mat = Matrix(A.base_ring(), len(L), len(exps), sparse=False)
+    mat = Matrix(A.base_ring(), len(L), len(exps) + len(cofactor_exps), sparse=False)
     for i, coefficients in enumerate(dictionaries):
         for e, c in coefficients.items():
             mat[i, index[e]] = c
+    for i, coefficients in enumerate(cofactor_dicts):
+        for e, c in coefficients.items():
+            mat[i, cofactor_index[e]] = c
 
-    # If requested, record which input rows form a basis of the row space
-    # (this must be read off before echelonizing, which mutates the matrix).
-    piv = mat.pivot_rows() if return_pivot_rows else None
+    # Profiling only cares about the value rows, not cofactor-only rows.
+    piv = None
+    if return_pivot_rows:
+        piv = mat[:, :len(exps)].pivot_rows() if tracked else mat.pivot_rows()
 
     mat.echelonize()
 
+    # return_matrix==True case:
     if return_matrix:
-        rows = [row for row in mat.rows() if not row.is_zero()]
+        rows = []
+        for row in mat.rows():
+            nz = row.nonzero_positions()
+            if not nz or nz[0] >= len(exps):
+                break
+            rows.append(row)
         return (Matrix(rows), piv) if return_pivot_rows else Matrix(rows)
 
-    # Convert the nonzero rows back to polynomials.  A single call to
-    # nonzero_positions() returns (row, col) pairs sorted by row, so we group
-    # them by row instead of extracting each row vector separately.
     out = []
-    cur_row, cur_dict = None, None
-    for i, j in mat.nonzero_positions(copy=False):
-        if i != cur_row:
-            if cur_dict is not None:
-                out.append(A(cur_dict))
-            cur_row, cur_dict = i, {}
-        cur_dict[exps[j]] = mat[i, j]
-    if cur_dict is not None:
-        out.append(A(cur_dict))
+    for row in mat.rows():
+        nz = row.nonzero_positions()
+        if not nz or nz[0] >= len(exps):
+            break  # A cofactor-only row supplies no reduction direction.
+        value = A({exps[j]: row[j] for j in nz if j < len(exps)})
+        if paired:
+            cofactor = (A({cofactor_exps[j - len(exps)]: row[j]
+                           for j in nz if j >= len(exps)}) if tracked else None)
+            out.append(ReducedElement(value, cofactor))
+        else:
+            out.append(value)
     return (out, piv) if return_pivot_rows else out
-    
 
-def linear_normal_form_p(L0 , M, reduce):
+
+def linear_normal_form_p(L0, M, reduce):
     r"""
-    Reduce multivariate polynomials modulo an already-echelonized list, directly in polynomial form.
-    
-    We assume $M$ is already echelonized, so reduction is performed simply by cancelling each leading 
-    monomial of $M$ in all entries of $L_0$.
+    Cancel an echelon basis's pivot monomials in each target.
 
-    This is an internal function for sage_periods, and is not 
-    meant to be called by the user.
-    
-    INPUT:
-    
-    * ``L0`` -- A sequence of multivariate polynomials to reduce.
-    * ``M`` -- An echelonized sequence of multivariate polynomials.
-    * ``reduce`` -- A boolean flag signalling whether to echelonize the output again.
-    
-    OUTPUT:
-    
-    * A sequence of polynomial normal forms modulo the span of M.
-
-    EXAMPLES:
-
-    A nontrivial example.
-
-            sage: var('t x0 x1 x2')
-            sage: p = 7
-            sage: A = PolynomialRing(GF(p),[x0,x1,x2])
-            sage: x = A.gens()
-            sage: B = echelonized_basis_poly([ A.random_element() for i in range(3)],A,False)
-            sage: linear_normal_form_p([A.random_element() for i in range(2)],B,reduce=False)
-            [-x0^2 - x1 + x2 - 3, -2*x0^2 + 2*x2^2 - 2*x0 + 2*x2 + 3]
-
-    You can reduce the result with respect to ``M0`` if you want to.
-
-            sage: linear_normal_form_p([A.random_element() for i in range(2)],B,reduce=True)
-            [x0*x1 - x1 + 3*x2 - 2, x2^2 - 3*x2 - 3]
-
-    Trivial examples.
-
-            sage: linear_normal_form_p([],B,False) # Trivial input list
-            []
-            sage: linear_normal_form_p([A(3*x[2]+1)],[],False) # Trivial basis reduction gives itself.
-            [3*x2 + 1]
-
+    ``L0`` and ``M`` contain polynomials or ``ReducedElement`` objects of the
+    same kind. For paired input, value coefficients determine each subtraction
+    and the same subtraction is applied to cofactors. If ``reduce`` is true,
+    echelonize the residual family before returning it.
     """
     L = L0
-    # Successively cancel the pivont monomial of each row of M in all targets
-    for j in range(len(M)):
-        m = M[j].lm()
-        for i in range(len(L)):
-            c = L[i].monomial_coefficient(m)
-            if c:
-                L[i] -= c*M[j]
+    paired = bool(L) and isinstance(L[0], ReducedElement)
+    if paired:
+        tracked = L[0].cofactor is not None
+        if any(not isinstance(p, ReducedElement) or (p.cofactor is not None) != tracked
+               for p in L) or any(not isinstance(p, ReducedElement) or
+                                  (p.cofactor is not None) != tracked for p in M):
+            raise ValueError("L0 and M must have the same cofactor mode.")
+        for m in M:
+            pivot = m.value.lm()
+            for i, p in enumerate(L):
+                c = p.value.monomial_coefficient(pivot)
+                if c:
+                    cofactor = p.cofactor - c*m.cofactor if tracked else None
+                    L[i] = ReducedElement(p.value - c*m.value, cofactor)
+    else:
+        # Successively cancel the pivot monomial of each row of M in all targets.
+        for m in M:
+            pivot = m.lm()
+            for i in range(len(L)):
+                c = L[i].monomial_coefficient(pivot)
+                if c:
+                    L[i] -= c*m
 
     if reduce:
-        # Optinally normalize the residual family itself
-        L = echelonized_basis_poly(L,False)
-    
+        L = echelonized_basis_poly(L, False)
+
     return L
