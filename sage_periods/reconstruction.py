@@ -8,7 +8,6 @@ from sage.rings.integer_ring import ZZ
 from sage.arith.misc import gcd
 from sage.arith.functions import lcm
 from sage.matrix.constructor import matrix
-from sage.structure.element import parent
 from sage.misc.misc_c import prod
 
 from .errors import BadPrimeError, NeedMorePrimesError
@@ -224,16 +223,15 @@ def recon_add_rat(H,val,point,xkey):
     r"""
     Reconstruction manager for evaluation-interpolation in our Gauss-Manin stage.
 
-    Here, ``val`` is a pair of the form $(\rho_0, B)$ where $\rho_0$ and $B$ are evaluated
-    objects obtained from ``gauss_manin_helper``. They're both matrices, but $\rho_0$ has dimensions 
-    $|M| \times 1$ matrix while $B$ has dimensions $|M| \times |M|$.
+    ``val`` is a tuple of matrices evaluated at the same point. Their entries
+    are reconstructed together, using only samples with the same key and shapes.
 
     This is an internal function for sage_periods, and is not meant to be called by the user.
 
     INPUT:
 
     * ``H`` -- A ``ReconstructionData`` instance storing the state of the current evaluation/interpolation reconstruction.
-    * ``val`` -- A pair ``(rho0, B)`` of evaluated Sage matrices, expressed in the same sampled basis.
+    * ``val`` -- A tuple of evaluated Sage matrices.
     * ``point`` -- The evaluation point of the parameter at which ``val`` was computed.
     * ``xkey`` -- A hashable key encoding the sampled basis pattern; only samples with the same key are combined.
 
@@ -288,37 +286,25 @@ def recon_add_rat(H,val,point,xkey):
 
     """
 
-    # Flatten each matrix in val
-    L_rho0, shape_rho0 = val[0].list(), val[0].dimensions()
-    L_B, shape_B = val[1].list(), val[1].dimensions()
+    val = tuple(val)
+    shapes = tuple(M.dimensions() for M in val)
+    sizes = [M.nrows() * M.ncols() for M in val]
+    L = [entry for M in val for entry in M.list()]
+    key = (xkey, shapes)
 
-    # Handle corner cases
-    if len(L_rho0) == 0 and len(L_B) == 0:
-        # Require two distinct points with the same empty basis and shapes.
-        empty_shape = (shape_rho0, shape_B)
-        previous = H.recons.get(xkey)
-        if (point not in H.points and isinstance(previous, tuple)
-                and previous == empty_shape):
-            H.candidate = (val[0], val[1])
-        H.recons[xkey] = empty_shape
+    # An entirely empty sample still needs two distinct, matching points.
+    if not L:
+        if point not in H.points and H.recons.get(key) == "empty":
+            H.candidate = val
+        H.recons[key] = "empty"
         H.points.add(point)
         return
-    if len(L_rho0) == 0 or len(L_B) == 0:
-        raise ValueError("Inconsistent empty stage-1 data")
 
-    # Keep track of "breakpoint" between these two objects in conjoined vector,
-    # i.e. the length of first vector, which is the index of first entry of second vector.
-    bkpt = len(L_rho0)
-
-    # Join the two vectors into one; we'll run our reconstruction machinery on this
-    # single vector, then separate and rebuild the pair at the end using bkpt.
-    assert parent(L_rho0[0]) == parent(L_B[0]), "rho0 and B evaluations must have same universe!"
-    L = L_rho0 + L_B
     Kev = L[0].parent()
+    if any(entry.parent() != Kev for entry in L):
+        raise TypeError("All matrix entries must have the same base field.")
     K = point.parent()
     Rt = K.ring()
-    
-    key = xkey # M' exponent basis
     H.points.add(point)
 
     # Following code of Lairez, we use a fixed random linear form on the flattened coordinates.  This gives a
@@ -395,12 +381,14 @@ def recon_add_rat(H,val,point,xkey):
             H.first_tick = None
             return 
 
-        # Otherwise, we have a good reconstruction candidate
-        # Rebuild our pair entries separately, then assign candidate
-        rho0_cand = [p / den for p in cand[:bkpt]]
-        B_cand = [p / den for p in cand[bkpt:]]
-
-        H.candidate = ( matrix(rho0_cand[0].parent(), *shape_rho0, rho0_cand), matrix(B_cand[0].parent(), *shape_B, B_cand) )
+        # Rebuild every matrix, including those with no entries.
+        entries = [K(p) / K(den) for p in cand]
+        pieces = []
+        offset = 0
+        for (nrows, ncols), size in zip(shapes, sizes):
+            pieces.append(matrix(K, nrows, ncols, entries[offset:offset + size]))
+            offset += size
+        H.candidate = tuple(pieces)
 
     H.recons[key] = recon
     return

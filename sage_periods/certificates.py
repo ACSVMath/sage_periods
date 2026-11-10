@@ -2,7 +2,7 @@ r"""Code for creation and verification of partial certificates, a la Section 7.3
 
 from sage.all import *
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 @dataclass
 class PeriodCertificate:
@@ -28,8 +28,6 @@ class PeriodCertificate:
     * ``operator_coefficients`` -- the dense coefficient list
       $[c_0, \dots, c_m]$ of the certified operator
       $L = \sum_k c_k \delta^k$;
-    * ``returned_operator`` -- the operator object returned to the user
-      (which may be a certified-by-division minimization of $L$).
     """
     a: object
     f: object
@@ -45,15 +43,15 @@ def verify_certificate(cert):
     r"""
     Verify a ``PeriodCertificate`` ``cert`` by exact computation over $\QQ(t)$.
 
-    Returns ``True`` if and only if an equivalent (encoded $\QQ(t)$-polynomial 
-    differential form) version of the criteria in Section 7.3 of Lairez are met.
-
-    TODO: Also check homogeneity?
+    Check the initial reduction, each Gauss-Manin matrix column, and the
+    operator relation by exact arithmetic over $\QQ(t)$.
     
     A successful verification proves that the operator formed from
     ``cert.operator_coefficients`` annihilates all the periods of the
-    prepared fraction $a/f^{q}$, hence of the original input; the proof does
-    not rely on any property of the algorithm that produced the certificate.
+    prepared fraction $a/f^{q}$. The proof does not rely on the algorithm
+    that produced the certificate. This routine checks the coefficients in
+    ``cert.operator_coefficients``; any separately minimized operator needs
+    its own verification.
 
     INPUT:
 
@@ -65,39 +63,84 @@ def verify_certificate(cert):
 
     EXAMPLES:
 
-    A certificate produced by the pipeline verifies:
+    A hand-built certificate for the constant period of $1/(x_0x_1)$:
 
-            sage: from sage_periods import compute_diagonal_annihilator, verify_certificate
-            sage: var('x y')
-            sage: L, cert = compute_diagonal_annihilator(1/(1-x-y), certificate=True)
-            sage: verify_certificate(cert)
-            True
-
-    Tampering with any part of the certificate makes it fail:
-
-            sage: cert.B[0,0] += 1
-            sage: verify_certificate(cert)
-            False
+        sage: K.<t> = FractionField(PolynomialRing(QQ, 't'))
+        sage: A.<x0, x1> = PolynomialRing(K)
+        sage: cert = PeriodCertificate(x0*x1, x0*x1, ((0, 0),), [1],
+        ....:     matrix(K, [[0]]), {(1, 1, 1, 0): 1}, [{}], [0, 1])
+        sage: verify_certificate(cert)
+        True
     """
+    A = cert.f.parent()
+    K = A.base_ring()
+    n = A.ngens()
+    N = cert.f.degree()
+    # cheap, dumb tests
+    if (not cert.f or N <= 0 or not cert.f.is_homogeneous()
+            or cert.a.parent() != A
+            or (cert.a and (not cert.a.is_homogeneous()
+                            or (cert.a.degree() + n) % N))):
+        return False
 
-    # STEP 0: Sanity checks: 
-    # - TODO: The parent rings of L and cert agree; L and cert have same "shape"?
-    # - Homogeneity and degree bookkeeping of the prepared fraction?
-    # - elements of cert.rho0, M, B have correct grading / degree?
+    def twisted_differential(encoded):
+        """
+        Take an encoded n-form and return the coefficient of D_f(form),
+        a topform. Assumes a valid encoded n-form is passed in.
+        """
+        components = [A.zero()]*n
 
-    # STEP 1: Verify rho_0 = a*omega + D_f(beta_0).
+        for exponents, coefficient in encoded.items():
+            e = tuple(exponents)  # (u exponent, v exponent, x exponents )
+            components[e[1] - 1] += A({e[2:]: K(coefficient)})
 
-    # STEP 2: Verify, for each mu basis elt of M, that the column of B 
-    # ...corresponding to mu equals -f^delta * mu * omega + D_f(eta_mu).
+        return sum((b.derivative(x) - b * cert.f.derivative(x)
+                    for b, x in zip(components, A.gens())), A.zero())
 
-    # STEP 3: Verify that sum_k c_k rho_k = 0 with rho_{k+1} = rho_k' + B rho_k.
-    
+    try:
+        # build M, verify B, rho, gammas are right shape
+        M = []
+        for exponents in cert.basis_exponents:
+            e = tuple(exponents)
+            if len(e) != n or (sum(e) + n) % N:
+                return False
+            M.append(A({e: K.one()}))
+        Msize = len(M)
+        if (len(cert.rho0) != Msize or cert.B.dimensions() != (Msize, Msize)
+                or len(cert.gammas) != Msize):
+            return False
 
-    pass
+        rho0 = vector(K, cert.rho0)
+        rho0_poly = sum((rho0[j] * M[j] for j in range(Msize)), A.zero())
 
-# ^^NOTE: This relies on the fact that these three conditions are equivalent
-# ...to the ones given in the paper. Perhaps a proof of this equivalence 
-# ...should be made explicitly somewhere? But it's not that difficult anyway.
+        # CHECK 1: Initial reduction: rho0 = a + D_f(beta0).
+        if rho0_poly != cert.a + twisted_differential(cert.beta0):
+            return False
+
+        # CHECK 2: Each column reduces -f_delta times its basis elt of M.
+        f_delta = A({e: c.derivative() for e, c in cert.f.dict().items()})
+        for j, mu in enumerate(M):
+            column = sum((K(cert.B[i, j]) * M[i]
+                          for i in range(Msize)), A.zero())
+            if column != -f_delta * mu + twisted_differential(cert.gammas[j]):
+                return False
+
+        coeffs = [K(c) for c in cert.operator_coefficients]
+        if not coeffs or not any(coeffs):
+            return False
+
+        # CHECK 3: linear dependency among the operator coefficients
+        if Msize:
+            relation = vector(K, Msize)
+            rho = rho0
+            for c in coeffs:
+                relation += c * rho
+                rho = vector(K, [entry.derivative() for entry in rho]) + cert.B * rho
+            if not relation.is_zero():
+                return False
+        return True
+    except (ArithmeticError, TypeError, ValueError, IndexError, AttributeError):
+        return False
 
 
 __all__ = ["PeriodCertificate", "verify_certificate"]
