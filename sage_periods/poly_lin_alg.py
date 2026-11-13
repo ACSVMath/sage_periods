@@ -3,11 +3,51 @@ r"""Linear algebra on polynomials and their encoded cofactors."""
 from typing import NamedTuple
 
 from sage.matrix.constructor import Matrix
+from sage.matrix.special import identity_matrix
 
 class ReducedElement(NamedTuple):
-    """Value and cofactor in ``U.xring``; ``None`` means untracked."""
+    """Value and cofactor in ``U.xring``; ``None`` means untracked.
+
+    A tracked cofactor is a polynomial or a ``CofactorCombination``; read it
+    with ``as_polynomial``."""
     value: object
     cofactor: object | None = None
+
+
+class CofactorCombination:
+    r"""
+    The cofactor $\sum_i c_i g_i$, stored as the coefficient vector $c$ over a
+    list ``gens`` of input cofactors shared by one echelonization, and
+    expanded only on demand.
+
+    Expanding every echelon row would make each cofactor dense over all
+    cofactor monomials of the slice; ``linear_normal_form_p`` instead combines
+    the coefficient vectors and expands once per target.
+    """
+    __slots__ = ("coeffs", "gens", "_poly")
+
+    def __init__(self, coeffs, gens):
+        self.coeffs, self.gens, self._poly = coeffs, gens, None
+
+    def polynomial(self):
+        if self._poly is None:
+            self._poly = _combine(self.coeffs, self.gens)
+        return self._poly
+
+
+def _combine(coeffs, gens):
+    """Return ``sum(coeffs[i] * gens[i])`` for a vector ``coeffs``."""
+    out = gens[0].parent().zero()
+    for i in coeffs.nonzero_positions():
+        out += coeffs[i] * gens[i]
+    return out
+
+
+def as_polynomial(cofactor):
+    """Expand a tracked cofactor (a polynomial or a ``CofactorCombination``)."""
+    if isinstance(cofactor, CofactorCombination):
+        return cofactor.polynomial()
+    return cofactor
 
 
 def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
@@ -25,7 +65,7 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     * ``return_pivot_rows`` -- (Optional) Boolean If ``True``, Return 
         the input rows that pivot in the value block.
 
-    ASSUMPTIONS:
+    ASSUMPTIONS: (not checked)
 
     * All values are in one polynomial ring over a field. In the modular
       reduction pipeline this is ``U.xring = GF(p)[u,v,x_0,...]``.
@@ -45,23 +85,19 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     # A ReducedElement with cofactor=None uses the same value-only matrix.
     if not L:
         return ([], []) if return_pivot_rows else []
-    if any(not isinstance(item, ReducedElement) for item in L):
-        raise TypeError("All inputs must be ReducedElement objects.")
     values = [item.value for item in L]
+    # !! Assuming all cofactors are ReducedElements...
     cofactors = [item.cofactor for item in L]
-    tracked = cofactors[0] is not None
-    if any((c is not None) != tracked for c in cofactors):
-        raise ValueError("Cofactors must either all be present or all be None.")
+    tracked = cofactors[0] is not None # Are we tracking cofactors or not?
+    if tracked:
+        # !! Assuming all cofactors are either all None or all Polys...
+        cofactors = [as_polynomial(c) for c in cofactors]
     A = values[0].parent()
-    if any(p.parent() != A for p in values) or \
-            (tracked and any(c.parent() != A for c in cofactors)):
-        raise TypeError("Values and cofactors must belong to the same polynomial ring.")
 
     # Enumerate all exponent vectors appearing in ``L`` and order them
-    # decreasingly with respect to the monomial order on ``A``.  Working with
-    # exponent vectors directly (rather than with ring elements or a
-    # CombinatorialFreeModule) lets us build the coefficient matrix straight
-    # from the polynomial dictionaries.
+    # decreasingly with respect to the monomial order on ``A``.  
+    # It turns out working with exponent vecotrs directly is faster 
+    # than with poly ring elts or a CombinatorialFreeModule.
     sortkey = A.term_order().sortkey
     dictionaries = [p.dict() for p in values]
     exps = set()
@@ -69,6 +105,38 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
         exps.update(coefficients)
     exps = sorted(exps, key=sortkey, reverse=True)
     index = {e: j for j, e in enumerate(exps)}
+    nvals = len(exps) # Number of value items
+
+    if tracked and not return_matrix:
+        # Echelonize [V | I]; the identity block records the row operations T.
+        # If V has full row rank, T (with T*V = RREF(V)) is unique, so T*C is
+        # the cofactor block of RREF([V | C]). Hence we keep T instead of T*C.
+        F = A.base_ring()
+        mat = Matrix(F, len(L), nvals, sparse=False)
+        # Build V portion of matrix
+        for i, coefficients in enumerate(dictionaries):
+            for e, c in coefficients.items():
+                mat[i, index[e]] = c
+        piv = mat.pivot_rows() if return_pivot_rows else None
+        # Augment identity matrix to transform cofactor columns.
+        aug = mat.augment(identity_matrix(F, len(L)))
+        aug.echelonize()
+        
+        # If we have only value pivots (i.e. V has full row rank), 
+        # ... store [V | I] echelonization only; apply to CofactorCombination later, 
+        # ... in linear_normal_form_p.
+        if aug.pivots()[-1] < nvals: 
+            reduced = aug.submatrix(0, 0, len(L), nvals)
+            rows = [{} for _ in L]
+            for i, j in reduced.nonzero_positions(copy=False):
+                rows[i][exps[j]] = reduced[i, j]
+            transform = aug.submatrix(0, nvals, len(L), len(L)).rows()
+            out = [ReducedElement(A(row), CofactorCombination(coeffs, cofactors))
+                   for row, coeffs in zip(rows, transform)]
+            return (out, piv) if return_pivot_rows else out
+        # Dependent values: use the [V | C] elimination below instead.
+
+    # === Old version. Fall back to this when we don't have full row rank in V. ===
 
     cofactor_dicts = [c.dict() for c in cofactors] if tracked else []
     cofactor_exps = sorted({e for d in cofactor_dicts for e in d},
@@ -108,14 +176,13 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     # nonzero_positions() lists (row, column) pairs in row-major
     # order; group them by row instead of extracting each row vector.
     # Rows with a value pivot come first; stop at first cofactor-only row.
-    nvals = len(exps) # number of value entries
     out = []
     row_index, value, cofactor = None, None, None
     for i, j in mat.nonzero_positions(copy=False): # For each nonzero (row,col) pair (i,j)
         if i != row_index:  # Once we've gotten to a new row, we should append the ReducedElement from the previous row.
             if row_index is not None:
                 out.append(ReducedElement(A(value), A(cofactor) if tracked else None))
-            if j >= nvals:
+            if j >= nvals: # "Recall" that nvals equals the number of value entries.
                 row_index = None
                 break  # A cofactor-only row supplies no reduction direction.
             row_index, value, cofactor = i, {}, {}
@@ -136,6 +203,10 @@ def linear_normal_form_p(L0, M, reduce):
     mode. Value coefficients determine each subtraction and the same
     subtraction is applied to cofactors. If ``reduce`` is true,
     echelonize the residual family before returning it.
+
+    When all of ``M`` carries ``CofactorCombination`` cofactors over one
+    generator list, the subtractions are summed on the coefficient vectors
+    and each target's cofactor is expanded once.
     """
     L = L0
     if not L:
@@ -144,19 +215,33 @@ def linear_normal_form_p(L0, M, reduce):
     # NOTE: Loop is formulated this way so we avoid building a new ReducedElement
     # after every single subtraction; only need one call per element of L0 at the end,
     # and this only if it is changed.
+    gens = None
+    if tracked and M and isinstance(M[0].cofactor, CofactorCombination):
+        gens = M[0].cofactor.gens
+        if any(not isinstance(m.cofactor, CofactorCombination)
+               or m.cofactor.gens is not gens for m in M):
+            gens = None # Sentinel allowing us to apply row op to entire CofactorCombination at once, or  proceed as before.
     pivots = [m.value.lm() for m in M]
     for i, p in enumerate(L):
-        value, cofactor, changed = p.value, p.cofactor, False
+        value, cofactor, changed, weights = p.value, p.cofactor, False, None
         for m, pivot in zip(M, pivots):
             c = value.monomial_coefficient(pivot)
             if c:
                 value = value - c*m.value
-                if tracked:
-                    cofactor = cofactor - c*m.cofactor
+                if gens is not None:
+                    # Keep bulding batch transformation for cofactor row
+                    w = c*m.cofactor.coeffs
+                    weights = w if weights is None else weights + w
+                elif tracked:
+                    cofactor = as_polynomial(cofactor) - c*as_polynomial(m.cofactor)
                 changed = True
+        # Apply transformation to CofactorRow, if we have all cofactors stored in batch form
+        if weights is not None:
+            cofactor = as_polynomial(cofactor) - _combine(weights, gens)
         if changed:
             L[i] = ReducedElement(value, cofactor)
-
+    
+    # never entered
     if reduce:
         L = echelonized_basis_poly(L, False)
 

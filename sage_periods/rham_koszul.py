@@ -11,7 +11,7 @@ from sage.matrix.constructor import matrix
 from sage.structure.element import parent
 
 
-from .poly_lin_alg import ReducedElement, echelonized_basis_poly, linear_normal_form_p
+from .poly_lin_alg import ReducedElement, as_polynomial, echelonized_basis_poly, linear_normal_form_p
 from .errors import ReductionOrderTooSmallError
 
 
@@ -558,7 +558,7 @@ def elementary_reduction_step(U, L0):
         return [exterior_derivative(U, p) for p in L]
     tracked = L0[0].cofactor is not None
     return [ReducedElement(exterior_derivative(U, nf),
-                           old.cofactor + nf - nf.coefficient({U.v: 0})
+                           as_polynomial(old.cofactor) + nf - nf.coefficient({U.v: 0})
                            if tracked else None)
             for old, nf in zip(L0, L)]
 
@@ -789,7 +789,7 @@ def _reduced_elements(U, polynomials, r):
                           U.xring.zero() if U.certify else None)
            for p in polynomials]
     _hom_reduce_helper(U, enc, r)
-    return [ReducedElement(U.fromx(p.value), p.cofactor) for p in enc]
+    return [ReducedElement(U.fromx(p.value), as_polynomial(p.cofactor)) for p in enc]
 
 
 def gauss_manin_helper(U, der, L, ret=None):
