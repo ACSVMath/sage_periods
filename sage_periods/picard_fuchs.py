@@ -491,44 +491,29 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                     verbose("Rational reconstruction failed to lift one or more of our coefficients. Need more primes.",level=1)
                     continue
 
-                # Check to see if L_coeffs has been assigned in L_recon_buckets and if it equals this value (stability)
-                if (L_recon_candidate is not None and L_recon_candidate == lift_result
-                        and majority_shape == candidate_shape
-                        and candidate_primes < majority_primes):
+                stable = (L_recon_candidate is not None and L_recon_candidate == lift_result
+                          and majority_shape == candidate_shape
+                          and candidate_primes < majority_primes)
+                if certify:
+                    # If we're certifying, don't need "stability" in our lift; just take
+                    # ...the first L that lifts successfully. 
+                    cert_operator, cert = _assemble_certificate(a, f, Alg, Dt, lift_result)
+                    if verify_certificate(cert):
+                        deq = (cert_operator, cert)
+                        break
+                    if stable:
+                        raise RuntimeError("Reconstructed partial certificate failed exact verification.")
+                    verbose("Lifted certificate does not verify yet. Need more primes.", level=1)
+                elif stable:
                     # We take this as the reconstructed operator having stabilized
                     # Break and return the operator
                     break
-                else:
-                    L_recon_candidate = lift_result
-                    candidate_shape, candidate_primes = majority_shape, majority_primes
-                    continue
-            
-        
-            # Build operator then return it.
-            m = len(L_coeffs)
-            deq = Alg(L_coeffs[m-1]*Dt**(m-1) - sum([L_coeffs[k]*(Dt**k) for k in range(m-1)]))
-            if certify:
-                # Build and verify the certificate.
-                _, lifted_cert_entries, basis_sig, supports = lift_result
-                nbasis = len(basis_sig)
-                Kt = a.parent().base_ring()
-                rho0_Q = list(lifted_cert_entries[:nbasis])
-                B_Q = matrix(Kt, nbasis, nbasis,
-                             list(lifted_cert_entries[nbasis:nbasis + nbasis**2]))
-                flat = lifted_cert_entries[nbasis + nbasis**2:]
-                reconstructed = []
-                offset = 0
-                for support in supports:
-                    reconstructed.append({e: flat[offset + i]
-                                          for i, e in enumerate(support)})
-                    offset += len(support)
-                cert = PeriodCertificate(
-                    a=a, f=f, basis_exponents=basis_sig, rho0=rho0_Q,
-                    B=B_Q, beta0=reconstructed[0], gammas=reconstructed[1:],
-                    operator_coefficients=list(deq.list()))
-                if not verify_certificate(cert):
-                    raise RuntimeError("Reconstructed partial certificate failed exact verification.")
-                deq = (deq, cert)
+                L_recon_candidate = lift_result
+                candidate_shape, candidate_primes = majority_shape, majority_primes
+
+            if not certify:
+                # Build operator then return it.
+                deq = _operator_from_coefficients(Alg, Dt, L_coeffs)
         except ReductionOrderTooSmallError as e:
             r += 1
             # Reset profile and seeded operator because they belong to the previous r.
@@ -539,3 +524,34 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
 
     # _first_run = False
     return deq
+
+
+def _operator_from_coefficients(Alg, Dt, L_coeffs):
+    """Operator c_{m-1} Dt^{m-1} - sum_{k<m-1} c_k Dt^k from the Stage-2 relation."""
+    m = len(L_coeffs)
+    return Alg(L_coeffs[m-1]*Dt**(m-1) - sum([L_coeffs[k]*(Dt**k) for k in range(m-1)]))
+
+
+def _assemble_certificate(a, f, Alg, Dt, lift_result):
+    """Build the operator and its ``PeriodCertificate`` from a certified Stage-3 lift."""
+    L_coeffs, lifted_cert_entries, basis_sig, supports = lift_result
+    # Build operator
+    deq = _operator_from_coefficients(Alg, Dt, L_coeffs)
+    nbasis = len(basis_sig)
+    Kt = a.parent().base_ring()
+    # Build rho0 and B over QQ
+    rho0_Q = list(lifted_cert_entries[:nbasis])
+    B_Q = matrix(Kt, nbasis, nbasis,
+                 list(lifted_cert_entries[nbasis:nbasis + nbasis**2]))
+    # Build beta0 and gammas
+    flat = lifted_cert_entries[nbasis + nbasis**2:]
+    reconstructed = []
+    offset = 0
+    for support in supports:
+        reconstructed.append({e: flat[offset + i] for i, e in enumerate(support)})
+        offset += len(support)
+    cert = PeriodCertificate(
+        a=a, f=f, basis_exponents=basis_sig, rho0=rho0_Q,
+        B=B_Q, beta0=reconstructed[0], gammas=reconstructed[1:],
+        operator_coefficients=list(deq.list()))
+    return deq, cert
