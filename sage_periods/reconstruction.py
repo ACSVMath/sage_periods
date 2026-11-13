@@ -8,6 +8,7 @@ from sage.rings.integer_ring import ZZ
 from sage.arith.misc import gcd
 from sage.arith.functions import lcm
 from sage.matrix.constructor import matrix
+from sage.modules.free_module_element import vector
 from sage.misc.misc_c import prod
 
 from .errors import BadPrimeError, NeedMorePrimesError
@@ -301,7 +302,7 @@ def recon_add_rat(H,val,point,xkey):
         return
 
     Kev = L[0].parent()
-    if any(entry.parent() != Kev for entry in L):
+    if any(M.base_ring() != Kev for M in val):
         raise TypeError("All matrix entries must have the same base field.")
     K = point.parent()
     Rt = K.ring()
@@ -312,12 +313,12 @@ def recon_add_rat(H,val,point,xkey):
     if key in H.rand:
         rand = H.rand[key]
     else:
-        rand = [Kev.random_element() for _ in L]
+        rand = vector(Kev, [Kev.random_element() for _ in L])
         H.rand[key] = rand
 
     # Compress the whole object to one scalar-valued sample used only as a
     # consistency test before the more expensive full coefficient reconstruction
-    test = sum((rand[i] * L[i] for i in range(len(L))), Kev.zero())
+    test = rand.dot_product(vector(Kev, L))
 
     # Add this test and our value to "buckets"
     if key in H.vals:
@@ -364,12 +365,14 @@ def recon_add_rat(H,val,point,xkey):
         else:
             evden = [den(p) for p in points]
         
-        '''
-            TODO:
-            Potential improvement: Cached batch reconstruction of the numerators? Or use one of the SOTA methods?
-        '''
-        for j in range(len(L)):
-            cand.append(Rt.lagrange_polynomial([(u, evden[i] * all_vals[i][0][j]) for i, u in enumerate(points)]))
+        # Interpolate all numerators at once with a single Vandermonde solve
+        k = len(points)
+        vandermonde = matrix(Kev, [[u**l for l in range(k)] for u in points])
+        samples = matrix(Kev, k, len(L), [x for vals, _ in all_vals for x in vals])
+        for i, d in enumerate(evden):
+            samples.rescale_row(i, d)
+        coefficients = vandermonde.solve_right(samples)
+        cand = [Rt(column.list()) for column in coefficients.columns()]
 
         # Now, cand is a sequence of same length as L, containing our reconstruction attempt
         if max((p.degree() for p in cand), default=ZZ(-1)) > QQ(2) * len(points) / 3:
