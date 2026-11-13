@@ -9,7 +9,9 @@ SCRATCH.ipynb
 /.ruff_cache
 /.venv
 /.agents
+/.worktrees
 sage_periods.zip
 Diagonal Minimality Formal Comparison.ipynb
 Operator Minimality Comparison.ipynb
 /tests/
+Parital Certificate Testing.ipynb

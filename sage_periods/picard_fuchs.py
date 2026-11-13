@@ -348,12 +348,17 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             # so is valid.
             lifter = CRTLifter()
             Lp_coeffs_dict = set() if certify else set(seed) # When certifying, we can't include a seed because it throws off later computations.
-            for sp, sc in (() if certify else seed.items()):
+            # Certify mode keeps the seed's operator shape only, to vet the probe's profile.
+            seed_shapes = {}
+            for sp, sc in seed.items():
                 try:
                     sshape, sints = operator_residues(sc)
                 except BadPrimeError:
                     continue
-                lifter.fold(sp, sints, sshape)
+                if certify:
+                    seed_shapes[sp] = sshape
+                else:
+                    lifter.fold(sp, sints, sshape)
             # Store primes p which can't be used in CRT lifting
             bad_primes = [] 
             primectr = 0
@@ -472,7 +477,12 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
                 # If the prime that produced our profile is not in the majority shape class
                 # (or was never folded), the profile may be degenerate too: reset it,
                 # so that it is re-recorded at the next prime.
-                if profile.prof_prime is not None and profile.prof_prime not in lifter.majority_primes():
+                # In certify mode the probe's prime is never folded, so compare its
+                # operator shape with the majority's instead of resetting unconditionally.
+                profile_ok = profile.prof_prime in lifter.majority_primes() or (
+                    profile.prof_prime in seed_shapes and lifter.classes
+                    and seed_shapes[profile.prof_prime] == lifter._majority()[0][0])
+                if profile.prof_prime is not None and not profile_ok:
                     verbose(f"Profile prime {profile.prof_prime} is not in the majority class; resetting profile.",level=1)
                     profile.reset()
 
