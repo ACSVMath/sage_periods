@@ -104,15 +104,27 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
             rows.append(row)
         return (Matrix(rows), piv) if return_pivot_rows else Matrix(rows)
 
+    # Rebuild matrix output
+    # nonzero_positions() lists (row, column) pairs in row-major
+    # order; group them by row instead of extracting each row vector.
+    # Rows with a value pivot come first; stop at first cofactor-only row.
+    nvals = len(exps) # number of value entries
     out = []
-    for row in mat.rows():
-        nz = row.nonzero_positions()
-        if not nz or nz[0] >= len(exps):
-            break  # A cofactor-only row supplies no reduction direction.
-        value = A({exps[j]: row[j] for j in nz if j < len(exps)})
-        cofactor = (A({cofactor_exps[j - len(exps)]: row[j]
-                       for j in nz if j >= len(exps)}) if tracked else None)
-        out.append(ReducedElement(value, cofactor))
+    row_index, value, cofactor = None, None, None
+    for i, j in mat.nonzero_positions(copy=False): # For each nonzero (row,col) pair (i,j)
+        if i != row_index:  # Once we've gotten to a new row, we should append the ReducedElement from the previous row.
+            if row_index is not None:
+                out.append(ReducedElement(A(value), A(cofactor) if tracked else None))
+            if j >= nvals:
+                row_index = None
+                break  # A cofactor-only row supplies no reduction direction.
+            row_index, value, cofactor = i, {}, {}
+        if j < nvals:
+            value[exps[j]] = mat[i, j]
+        else:
+            cofactor[cofactor_exps[j - nvals]] = mat[i, j]
+    if row_index is not None: # Take care of the very last row after we exit the loop
+        out.append(ReducedElement(A(value), A(cofactor) if tracked else None))
     return (out, piv) if return_pivot_rows else out
 
 
@@ -129,13 +141,21 @@ def linear_normal_form_p(L0, M, reduce):
     if not L:
         return []
     tracked = L[0].cofactor is not None
-    for m in M:
-        pivot = m.value.lm()
-        for i, p in enumerate(L):
-            c = p.value.monomial_coefficient(pivot)
+    # NOTE: Loop is formulated this way so we avoid building a new ReducedElement
+    # after every single subtraction; only need one call per element of L0 at the end,
+    # and this only if it is changed.
+    pivots = [m.value.lm() for m in M]
+    for i, p in enumerate(L):
+        value, cofactor, changed = p.value, p.cofactor, False
+        for m, pivot in zip(M, pivots):
+            c = value.monomial_coefficient(pivot)
             if c:
-                cofactor = p.cofactor - c*m.cofactor if tracked else None
-                L[i] = ReducedElement(p.value - c*m.value, cofactor)
+                value = value - c*m.value
+                if tracked:
+                    cofactor = cofactor - c*m.cofactor
+                changed = True
+        if changed:
+            L[i] = ReducedElement(value, cofactor)
 
     if reduce:
         L = echelonized_basis_poly(L, False)
