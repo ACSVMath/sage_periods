@@ -83,64 +83,108 @@ def verify_certificate(cert):
                             or (cert.a.degree() + n) % N))):
         return False
 
-    def twisted_differential(encoded):
-        """
-        Take an encoded n-form and return the coefficient of D_f(form),
-        a topform.
+    # Instead of running checks over A = QQ(t)[x_0,...,x_n], multiply all polys
+    # by an lcm and run over S = QQ[x_0, ..., x_n, t].
+    # This avoids many Singular gcd calls.
+    R = K.ring()
+    S = PolynomialRing(K.base_ring(), list(A.variable_names()) + [R.variable_name()])
+    to_S = R.hom([S.gen(n)], S)
 
-        ***Assumes:
-         - a valid encoded n-form is passed in.
-        """
-        components = [A.zero()]*n
+    def denominator_lcm(coefficients):
+        return lcm([K(c).denominator() for c in coefficients if c] or [R.one()])
 
+    def cleared(terms, denom):
+        """``denom * sum(c * x^e)`` in S; ``denom*c`` must be a polynomial in t."""
+        out = {}
+        for e, c in terms:
+            q = denom * K(c)
+            if q.denominator() != 1:
+                raise ArithmeticError("denominator does not divide the multiplier")
+            for k, ck in enumerate(q.numerator().list()):
+                if ck:
+                    out[tuple(e) + (k,)] = ck
+        return S(out)
+
+    # cast f, its denominator, and f^\delta into S.
+    fdict = cert.f.dict()
+    denom_f = denominator_lcm(fdict.values())
+    f_S = cleared(fdict.items(), denom_f)
+    df_S = [f_S.derivative(S.gen(i)) for i in range(n)]
+    denom_f_S = to_S(denom_f)
+
+    def check_reduction(lhs, encoded):
+        """Exact test of ``lhs == D_f(encoded)``; ``lhs`` is a dict {exponent : QQ(t)}."""
+        components = [[] for _ in range(n)]
         for exponents, coefficient in encoded.items():
-            if not coefficient:
-                continue
-            e = tuple(exponents)  # (u exponent, v exponent, x exponents )
-            components[e[1] - 1] += A({e[2:]: K(coefficient)})
-
-        return sum((b.derivative(x) - b * cert.f.derivative(x)
-                    for b, x in zip(components, A.gens())), A.zero())
+            if coefficient:
+                e = tuple(exponents)  # (u exponent, v exponent, x exponents...)
+                components[e[1] - 1].append((e[2:], coefficient))
+        denom_b = denominator_lcm(encoded.values())
+        # denom_b*denom_f*D_f(beta) = sum_i (denom_f d_i b~_i - b~_i d_i f~), with b~ = denom_b*b, f~ = denom_f*f.
+        # Build rhs
+        rhs = S.zero()
+        for i, terms in enumerate(components):
+            if terms:
+                b = cleared(terms, denom_b)
+                rhs += denom_f_S * b.derivative(S.gen(i)) - b * df_S[i]
+        # Build lhs denominator
+        D = lcm(denom_b * denom_f, denominator_lcm(lhs.values()))
+        return cleared(lhs.items(), D) == to_S(D // (denom_b * denom_f)) * rhs
 
     try:
-        # build M, verify B, rho, gammas are right shape
+        # Build M
         M = []
         for exponents in cert.basis_exponents:
             e = tuple(exponents)
             if len(e) != n or (sum(e) + n) % N:
                 return False
-            M.append(A({e: K.one()}))
+            M.append(e)
         Msize = len(M)
+        # Verify B, rho, gammas are right shape
         if (len(cert.rho0) != Msize or cert.B.dimensions() != (Msize, Msize)
                 or len(cert.gammas) != Msize):
             return False
 
-        rho0 = vector(K, cert.rho0)
-        rho0_poly = sum((rho0[j] * M[j] for j in range(Msize)), A.zero())
-
         # CHECK 1: Initial reduction: rho0 = a + D_f(beta0).
-        if rho0_poly != cert.a + twisted_differential(cert.beta0):
+        lhs = {}
+        for e, c in zip(M, cert.rho0):
+            lhs[e] = lhs.get(e, 0) + K(c)
+        for e, c in cert.a.dict().items():
+            e = tuple(e)  # ETuple keys do not match tuple keys
+            lhs[e] = lhs.get(e, 0) - c
+        if not check_reduction(lhs, cert.beta0):
             return False
 
         # CHECK 2: Each column reduces -f_delta times its basis elt of M.
-        f_delta = A({e: c.derivative() for e, c in cert.f.dict().items()})
+        f_delta = [(tuple(e), c.derivative()) for e, c in fdict.items()]
         for j, mu in enumerate(M):
-            column = sum((K(cert.B[i, j]) * M[i]
-                          for i in range(Msize)), A.zero())
-            if column != -f_delta * mu + twisted_differential(cert.gammas[j]):
+            lhs = {}
+            for i, e in enumerate(M):
+                lhs[e] = lhs.get(e, 0) + K(cert.B[i, j])
+            for e, c in f_delta:
+                emu = tuple(x + y for x, y in zip(e, mu))
+                lhs[emu] = lhs.get(emu, 0) + c
+            if not check_reduction(lhs, cert.gammas[j]):
                 return False
 
         coeffs = [K(c) for c in cert.operator_coefficients]
         if not coeffs or not any(coeffs):
             return False
 
-        # CHECK 3: linear dependency among the operator coefficients
+        # CHECK 3: linear dependency among the operator coefficients.
+        # Take the lcm g of all denominators of rho0, B and the c_k first.
         if Msize:
-            relation = vector(K, Msize)
-            rho = rho0
-            for c in coeffs:
-                relation += c * rho
-                rho = vector(K, [entry.derivative() for entry in rho]) + cert.B * rho
+            g = denominator_lcm(list(cert.rho0) + cert.B.list() + coeffs)
+            G = matrix(R, Msize, Msize, [R(g * K(c)) for c in cert.B.list()])
+            r = vector(R, [R(g * K(c)) for c in cert.rho0])
+            c_R = [R(g * c) for c in coeffs]
+            m = len(coeffs) - 1
+            dg = g.derivative()
+            relation = vector(R, Msize)
+            for k, c in enumerate(c_R):
+                relation += (c * g**(m - k)) * r
+                if k < m:
+                    r = vector(R, [g * x.derivative() - (k + 1) * dg * x for x in r]) + G * r
             if not relation.is_zero():
                 return False
         return True
