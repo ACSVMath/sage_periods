@@ -1,9 +1,18 @@
 r"""Main stages in our modular pipeline for the reduction algorithm"""
 
-from sage.all import *
+# Sage package imports
+from sage.rings.finite_rings.finite_field_constructor import GF
+from sage.matrix.constructor import Matrix
+from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
+from sage.rings.integer_ring import ZZ
+from sage.arith.functions import lcm
+from sage.matrix.constructor import matrix
+from sage.modules.free_module_element import vector
+
+# sage_periods imports
 from .reconstruction import ReconstructionData, recon_add_rat
 from .rham_koszul import RhamKoszulData, gauss_manin_helper
-from .errors import *
+from .errors import BadPrimeError, ReductionOrderTooSmallError
 
 from sage.misc.verbose import verbose, set_verbose
 

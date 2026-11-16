@@ -1,6 +1,9 @@
 r"""Code for creation and verification of partial certificates, a la Section 7.3 of Lairez"""
 
-from sage.all import *
+from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
+from sage.arith.functions import lcm
+from sage.matrix.constructor import matrix
+from sage.modules.free_module_element import vector
 
 from dataclasses import dataclass
 

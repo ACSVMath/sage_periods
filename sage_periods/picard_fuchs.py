@@ -3,7 +3,15 @@ Main functions to compute annihilating D-finite operators for diagonals and peri
 """
 
 # Sage package imports
-from sage.all import *
+from sage.rings.finite_rings.finite_field_constructor import GF
+from sage.rings.integer import Integer
+from sage.rings.polynomial.ore_polynomial_ring import OrePolynomialRing
+from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
+from sage.rings.rational_field import QQ
+from sage.symbolic.ring import SR
+from sage.matrix.constructor import matrix
+from sage.arith.misc import random_prime
+from sage.misc.reset import reset
 
 # Imports from our modules
 # from .reconstruction import ReconstructionData, compute_reductions_dependency, recon_add_rat
@@ -14,7 +22,7 @@ from .pipeline import compute_gauss_manin_connection, compute_reductions_depende
 from .reconstruction import (CRTLifter, operator_residues, operator_from_lift,
                              operator_residue_count, ratfun_residues,
                              ratfuns_from_lift, reconstruction_degree_hint)
-from .errors import *
+from .errors import BadPrimeError, NeedMorePrimesError, ReductionOrderTooSmallError
 from .profiling import ProfileData
 from .certificates import PeriodCertificate, verify_certificate
 
@@ -126,7 +134,7 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
     # - R is its own diagonal, if we passed in r = (1...1)
     # - R's diagonal is zero, if we passed in different r.
     if R_normalized.numerator().is_constant() and R_normalized.denominator().is_constant():
-        if r == None or all(r[i] == 1 or r[i] == Integer(1) for i in range(d)):
+        if r == None or all(r[i] == 1 or r[i] == Integer(1) for i in range(len(r))):
             return compute_period_annihilator(
                 R_normalized, t, Dt, reduction_order=reduction_order, certify=certify,
                 minimize_denom_deg=minimize_denom_deg, ncpus=ncpus,

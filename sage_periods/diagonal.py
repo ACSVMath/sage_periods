@@ -1,6 +1,16 @@
 r"""Utilities for working with diagonals."""
 
-from sage.all import *
+# sage core imports
+from sage.rings.number_field.number_field import CyclotomicField
+from sage.rings.integer import Integer
+from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
+from sage.rings.rational_field import QQ
+from sage.symbolic.ring import SR
+from sage.rings.integer_ring import ZZ
+from sage.arith.functions import lcm
+from sage.misc.misc_c import prod
+
+# OreAlgebra imports
 from ore_algebra import OreAlgebra as _OreAlgebra
 from ore_algebra import guess as _guess
 from sage.misc.verbose import verbose

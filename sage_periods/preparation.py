@@ -1,13 +1,20 @@
 r"""Functions used in preparing rational period intetgral for modular pipeline."""
 
-from sage.all import *
+# Sage core imports
+from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
+from sage.rings.rational_field import QQ
+from sage.symbolic.ring import SR
+from sage.misc.misc_c import prod
+from sage.arith.misc import random_prime
 
+# sage_periods imports
 from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, prepare_coefficient_data
-from .errors import *
+from .errors import BadPrimeError, ReductionOrderTooSmallError
 from .profiling import ProfileData
 from .reconstruction import reconstruction_degree_hint
 from .rham_koszul import _staircase_cache
 
+# Other misc imports
 from sage.misc.verbose import verbose
 import multiprocessing
 import traceback

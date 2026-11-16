@@ -43,6 +43,8 @@ from sage.matrix.constructor import Matrix, matrix
 from sage.libs.singular.function_factory import ff
 from sage.rings.polynomial.polydict import ETuple
 
+from .errors import ReductionOrderTooSmallError
+
 
 class LinearEngine:
     r"""
