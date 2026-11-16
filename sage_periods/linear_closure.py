@@ -30,10 +30,8 @@ cached.  Dense echelonization goes through the same
 columns sorted by the same degrevlex key, so pivot choices -- and hence
 every output -- coincide exactly with the polynomial implementation.
 
-The engine is used automatically by ``gauss_manin_helper`` when the
-coefficient field is a prime finite field (i.e., in the modular pipeline);
-the polynomial implementation remains in place for other base rings and 
-for the certificate variant.
+``engine_gauss_manin_helper`` provides this alternative implementation.
+The current pipeline calls ``gauss_manin_helper`` in ``rham_koszul.py``.
 """
 
 import numpy as np

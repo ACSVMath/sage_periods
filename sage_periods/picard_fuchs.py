@@ -49,12 +49,12 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
     * ``t`` -- (Optional) The name for the variable in the output, taken as ``t`` by default.
     * ``reduction_order`` -- (Optional) The smallest order to start computing the modular Lairez reduction at. When ``None`` is passed in, a small order is selected
      which is likely to give the best combination of small operator size and small runtime.
-    * ``minimize`` -- (Optional) When ``True`` (and``ore_algebra`` is installed), 
-      recurrence guessing is used to attempt to minimize the operator produced 
-      by vanilla ``compute_diagonal_annihilator``. If this function returns with
-      ``minimize=True``, this certifies that the output annihilates
-      the diagonal and is a right divisor of the operator computed when 
-      ``minimize`` is set to ``False``.
+    * ``minimize`` -- (Optional) If ``True``, attempt to return a lower-order
+      operator using ``OreAlgebra``'s recurrence guessing capabilities.
+      Any replacement is verified to annihilate the diagonal and
+      right-divide the operator returned with ``minimize=False``; otherwise
+      the original operator is returned. Without ``ore_algebra``, minimization
+      is skipped with a warning.
     * ``certify`` -- If ``True``, return an operator and its verified partial certificate.
       With ``minimize=True``, the partial certificate proves the original operator;
       the minimization routine verifies the returned right divisor separately.
@@ -69,8 +69,14 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
 
     OUTPUT:
 
-    * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that annihilates the $r$-diagonal of ``R`` or, if ``ore_algebra`` is not available, an element of the ``OrePolynomialRing`` over ``QQ[t]`` with derivation symbol ``Dt``
-    * TODO: Add output and EXAMPLES for certificates and other parameters!
+    * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt``
+      that annihilates the $r$-diagonal of ``R``; without ``ore_algebra``, an
+      element of Sage's ``OrePolynomialRing`` over ``QQ[t]``. With
+      ``minimize=True``, this may be a verified right divisor of the original
+      operator.
+    * If ``certify=True``, return ``(L, cert)`` instead. The verified
+      ``PeriodCertificate`` ``cert`` proves the original operator; when
+      ``minimize=True``, the returned right divisor is verified during minimization.
 
     EXAMPLES:
 
@@ -93,24 +99,53 @@ def compute_diagonal_annihilator(R, r = None, vari = None, Dt = None, t = None, 
         sage: compute_diagonal_annihilator(F,r=r,vari=[x,y],t=z, Dt='Dz')
         (243*z^8 - 810*z^7 + 837*z^6 - 2412*z^5 - 1779*z^4 - 202*z^3 + 27*z^2)*Dz^3 + (2187*z^7 - 4617*z^6 + 972*z^5 - 594*z^4 - 5661*z^3 - 1557*z^2 + 54*z)*Dz^2 + (4374*z^6 - 3888*z^5 - 4374*z^4 + 3168*z^3 + 2010*z^2 - 1296*z + 6)*Dz + 1458*z^5 + 486*z^4 - 1296*z^3 - 1368*z^2 + 750*z - 30
 
-    If the ``ore_algebra`` package is not installed, a warning will be displayed
-    and results will be returned as an ``OrePolynomial`` in ``t`` and ``Dt``
+    Certification returns the operator and a certificate. A reduction order
+    can be selected explicitly, and denominator preprocessing can be disabled 
+     -- it's enabled by default. All three of these flags are independent of
+    one another.
 
-            sage: from sage_periods import compute_diagonal_annihilator
-            sage: var('t x y')
-            sage: F = 1/(1-x-y-x*y**3)
-            sage: L = compute_diagonal_annihilator(F)
-            sage: L
-            Warning: 'ore_algebra' is not installed. Operators will be output as dense univariate OrePolynomials in Q[t][Dt]. Some features may be disabled.
+        sage: from sage_periods import verify_certificate
+        sage: var('a b c')
+        sage: G = 1/(1-a-b-c)
+        sage: L, cert = compute_diagonal_annihilator(G, reduction_order=2,
+        ....:     minimize_denom_deg=False, certify=True)
+        sage: verify_certificate(cert)
+        True
+
+    With ``ore_algebra``, minimization may return the original operator if it
+    finds no improvement.
+
+        sage: M = compute_diagonal_annihilator(G, reduction_order=2,  # optional - ore_algebra
+        ....:     minimize_denom_deg=False, minimize=True)
+        sage: M.order() <= L.order()  # optional - ore_algebra
+        True
+
+    Without ``ore_algebra``, the operator is a Sage ``OrePolynomial``. The
+    import warning appears once when starting a session without that package:
+
+    .. code-block:: text
+
+        sage: from sage_periods import compute_diagonal_annihilator
+        Warning: 'ore_algebra' is not installed. Operators will be output as dense univariate OrePolynomials in Q[t][Dt]. Some features may be disabled.
+        sage: var('t x y')
+        sage: F = 1/(1-x-y-x*y**3)
+        sage: L = compute_diagonal_annihilator(F)
+        sage: L
         (t^6 + 2/3*t^5 + 5/9*t^4 + 4/9*t^3 - 1/9*t^2 - 2/81*t + 1/243)*Dt^2 + (4*t^5 + 10/3*t^4 + 8/9*t^2 - 4/27*t + 2/81)*Dt + 2*t^4 + 2*t^3 - 2/3*t^2 - 2/27*t - 8/81
-            sage: L.parent()
-            Ore Polynomial Ring in Dt over Univariate Polynomial Ring in t over Rational Field twisted by d/dt
+        sage: L.parent()
+        Ore Polynomial Ring in Dt over Univariate Polynomial Ring in t over Rational Field twisted by d/dt
+        sage: M = compute_diagonal_annihilator(F, minimize=True)
+        Warning: 'ore_algebra' is not installed; skipping diagonal minimization.
+        sage: M.parent()
+        Ore Polynomial Ring in Dt over Univariate Polynomial Ring in t over Rational Field twisted by d/dt
 
     !!! warning
-    
-        In particular, ``OrePolynomial`` has no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It will instead return an error.
-        This is one of several limitations of the ``OrePolynomialRing`` class, hence why we recommend ``OreAlgebra``.
 
+        Sage's ``OrePolynomial`` does not reliably apply a differential
+        operator when called on a polynomial, such as ``L(t^2 + 2*t - 3)``,
+        among other limitations.
+        
+        Our package's method for minimization also requires ``OreAlgebra``, hence why we strongly recommend it.
     """
 
     # Validate inputs and "normalize" arguments so R is symbolic, r and vari are defined
@@ -201,10 +236,11 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
 
     OUTPUT:
 
-    * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt`` that 
-    annihilates the residue of ``R`` with respect to $x_1,...,x_n$ or, if ``ore_algebra`` 
-    is not available, an element of the ``OrePolynomialRing`` over ``QQ[t]`` with derivation symbol ``Dt``
-    * TODO: Add output and EXAMPLES for certificates and other parameters!
+    * ``L`` -- An element of the differential ``OreAlgebra`` in ``t`` and ``Dt``
+      that annihilates the specified periods of ``R``; without
+      ``ore_algebra``, an element of Sage's ``OrePolynomialRing`` over ``QQ[t]``.
+    * If ``certify=True``, return ``(L, cert)`` instead, where ``cert`` is a
+      verified ``PeriodCertificate`` for ``L``.
 
 
     EXAMPLES:
@@ -229,23 +265,43 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
             sage: compute_period_annihilator(F,t,'Dt')
             (t^8 - 257551/5980*t^7 + 434946/1495*t^6 + 374641/598*t^5 - 528511/1495*t^4 + 58941/5980*t^3)*Dt^4 + (170/13*t^7 - 2993981/5980*t^6 + 5837574/1495*t^5 + 8354793/2990*t^4 - 3626052/1495*t^3 + 54575/1196*t^2)*Dt^3 + (565/13*t^6 - 8477641/5980*t^5 + 68078253/5980*t^4 - 4844873/5980*t^3 - 20736217/5980*t^2 + 6549/230*t)*Dt^2 + (475/13*t^5 - 2841061/2990*t^4 + 10195067/1495*t^3 - 92604/23*t^2 - 15836/23*t - 2183/598)*Dt + 53/13*t^4 - 223701/2990*t^3 + 864791/2990*t^2 - 815887/2990*t + 10915/598
 
-    If the ``ore_algebra`` package is not installed, a warning will be displayed
-    and results will be returned as an ``OrePolynomial`` in ``t`` and ``Dt``:
+    Certification returns the operator and a certificate. A reduction order
+    can be selected explicitly, and denominator preprocessing can be disabled 
+     -- it's enabled by default. All three of these flags are independent of
+    one another.
 
-            sage: from sage_periods import compute_period_annihilator
-            sage: var('t x y')
-            sage: F = 1/(1-x-y-x*y**3)
-            sage: L = compute_period_annihilator(F,x,'Dx')
-            sage: L
-            Warning: 'ore_algebra' is not installed. Operators will be output as dense univariate OrePolynomials in Q[t][Dt]. Some features may be disabled.
-            (x^5 - 7/3*x^4 + 5/3*x^3 - 5/27*x^2 - 4/81*x)*Dx^2 + (4*x^4 - 20/3*x^3 + 10/3*x^2 - 20/27*x - 2/81)*Dx + 2*x^3 - 2*x^2 + 2/3*x - 2/27
-            sage: L.parent()
-            Ore Polynomial Ring in Dx over Univariate Polynomial Ring in x over Rational Field twisted by d/dx
+            sage: from sage_periods import verify_certificate
+            sage: G = 1/(1-t*x*y)
+            sage: L, cert = compute_period_annihilator(G, t, 'Dt',
+            ....:     reduction_order=1, minimize_denom_deg=False, certify=True)
+            sage: verify_certificate(cert)
+            True
+
+    Without ``ore_algebra``, the operator is a Sage ``OrePolynomial``. The
+    import warning appears once when starting a session without that package:
+
+    .. code-block:: text
+
+        sage: from sage_periods import compute_period_annihilator
+        Warning: 'ore_algebra' is not installed. Operators will be output as dense univariate OrePolynomials in Q[t][Dt]. Some features may be disabled.
+        sage: var('t x y')
+        sage: F = 1/(1-x-y-x*y**3)
+        sage: L = compute_period_annihilator(F,x,'Dx')
+        sage: L
+        (x^5 - 7/3*x^4 + 5/3*x^3 - 5/27*x^2 - 4/81*x)*Dx^2 + (4*x^4 - 20/3*x^3 + 10/3*x^2 - 20/27*x - 2/81)*Dx + 2*x^3 - 2*x^2 + 2/3*x - 2/27
+        sage: L.parent()
+        Ore Polynomial Ring in Dx over Univariate Polynomial Ring in x over Rational Field twisted by d/dx
 
     !!! warning
-    
-        In particular, ``OrePolynomial`` has no reliable built-in for "evaluating" on elements of the base ring. For instance, calling ``L(t^2 + 2*t - 3)`` will not apply ``L`` to the polynomial ``t^2 + 2*t - 3``, even if both objects are in the right rings. It will instead return an error.
-        This is one of several limitations of the ``OrePolynomialRing`` class, hence why we recommend ``OreAlgebra``.
+
+        Sage's ``OrePolynomial`` does not reliably apply a differential
+        operator when called on a polynomial, such as ``L(x^2 + 2*x - 3)``,
+        among other limitations.
+        
+        Our package's method for minimization also requires ``OreAlgebra``, hence why we strongly recommend it.
+
+
+
 
     !!! note
 

@@ -62,8 +62,8 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
     * ``L`` -- A list of ``ReducedElement`` objects.
     * ``return_matrix`` -- (Optional) Boolean. If ``True``, return their 
         coefficient matrix (value columns first) instead of the element list.
-    * ``return_pivot_rows`` -- (Optional) Boolean If ``True``, Return 
-        the input rows that pivot in the value block.
+    * ``return_pivot_rows`` -- (Optional) Boolean. If ``True``, also return
+        the indices of input rows that pivot in the value block.
 
     ASSUMPTIONS: (not checked)
 
@@ -81,6 +81,19 @@ def echelonized_basis_poly(L, return_matrix=False, return_pivot_rows=False):
 
     This is an internal function for sage_periods, and is not 
     meant to be called by the user.
+
+    EXAMPLES:
+
+        sage: from sage_periods.poly_lin_alg import ReducedElement, echelonized_basis_poly
+        sage: R = PolynomialRing(QQ, ["x", "y"])
+        sage: x, y = R.gens()
+        sage: L = [ReducedElement(x), ReducedElement(2*x)]
+        sage: echelonized_basis_poly(L)
+        [ReducedElement(value=x, cofactor=None)]
+        sage: echelonized_basis_poly(L, return_matrix=True)
+        [1]
+        sage: echelonized_basis_poly(L, return_pivot_rows=True)[1]
+        (0,)
     """
     # A ReducedElement with cofactor=None uses the same value-only matrix.
     if not L:
@@ -207,6 +220,27 @@ def linear_normal_form_p(L0, M, reduce):
     When all of ``M`` carries ``CofactorCombination`` cofactors over one
     generator list, the subtractions are summed on the coefficient vectors
     and each target's cofactor is expanded once.
+
+    INPUT:
+
+    * ``L0`` -- A list of target ``ReducedElement`` objects, updated in place.
+    * ``M`` -- An echelonized list of ``ReducedElement`` objects, representing an echelonized basis to reduce against.
+    * ``reduce`` -- If ``True``, echelonize the residual list before returning it.
+
+    OUTPUT:
+
+    * The residual list of ``ReducedElement`` objects.
+
+    EXAMPLES:
+
+        sage: from sage_periods.poly_lin_alg import ReducedElement, linear_normal_form_p
+        sage: R = PolynomialRing(QQ, ["x", "y"])
+        sage: x, y = R.gens()
+        sage: L = [ReducedElement(x + 1)]
+        sage: linear_normal_form_p(L, [ReducedElement(x)], False)
+        [ReducedElement(value=1, cofactor=None)]
+        sage: L[0].value
+        1
     """
     L = L0
     if not L:

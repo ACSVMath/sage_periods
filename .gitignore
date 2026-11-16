@@ -14,4 +14,5 @@ sage_periods.zip
 Diagonal Minimality Formal Comparison.ipynb
 Operator Minimality Comparison.ipynb
 /tests/
-Parital Certificate Testing.ipynb
+Partial Certificate Testing.ipynb
+diagonal_series_terms_cython.pyx

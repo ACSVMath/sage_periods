@@ -11,8 +11,11 @@ from sage.arith.functions import lcm
 from sage.misc.misc_c import prod
 
 # OreAlgebra imports
-from ore_algebra import OreAlgebra as _OreAlgebra
-from ore_algebra import guess as _guess
+# Check if ore_algebra is available, and import it if so
+from . import _is_ore_algebra_installed
+if _is_ore_algebra_installed:
+    from ore_algebra import OreAlgebra as _OreAlgebra
+    from ore_algebra import guess as _guess
 from sage.misc.verbose import verbose
 
 
@@ -133,6 +136,8 @@ def minimize_diagonal_annihilator(L, P, Q, r, t,ncpus=1):
     complexity strictly less than ``L``, that operator is a proper right factor
     of L which also annihilates the diagonal.
 
+    If ``ore_algebra`` is unavailable, warn and return ``L`` unchanged.
+
     !!! warning
     
         The returned operator, even if it is smaller, may or may not be minimal!
@@ -142,6 +147,10 @@ def minimize_diagonal_annihilator(L, P, Q, r, t,ncpus=1):
     This is an internal function for sage_periods, and is not meant to be
     called by the user.
     """
+
+    if not _is_ore_algebra_installed:
+        print("Warning: 'ore_algebra' is not installed; skipping diagonal minimization.")
+        return L
 
     Alg = L.parent()
     Dt = Alg.gen()

@@ -21,10 +21,9 @@ from dataclasses import dataclass, field
 
 def cauchy_interp_rational_fn(K, pairs, criterion="total_degree"):
     r"""
-    Performs Cauchy interpolation across all k from 0 to len(pairs) inclusive and chooses
-    the "best" rational output according to ``criterion``.
+    Interpolate a rational function from sample pairs using ``criterion``.
 
-    The possible criterion are
+    The possible criteria are
 
     - ``total_degree``: minimize ``deg(num)+deg(den)``
     - ``max_degree``:   minimize ``max(deg(num),deg(den))``
@@ -37,7 +36,7 @@ def cauchy_interp_rational_fn(K, pairs, criterion="total_degree"):
     INPUT:
 
     * ``K`` -- A Sage fraction field, typically $GF(p)(t)$, in which the reconstructed function $h(t)$ lies.
-    * ``pairs`` -- A Python list ``[(u_i, v_i), ...]`` with each $v_i$ in $GF(p)$ and each $u_i$ coercible to $GF(p)$
+    * ``pairs`` -- An iterable of ``(u_i, v_i)`` pairs with each $v_i$ in $GF(p)$ and each $u_i$ coercible to $GF(p)$
       (for example $u_i \in \mathbb Q$ with denominator not divisible by $p$).
     * ``criterion`` -- (Optional) A string specifying how to choose the "best" admissible reconstruction among the EEA candidates.
       Supported values are ``total_degree``, ``max_degree``, and ``den_degree``.
@@ -53,46 +52,30 @@ def cauchy_interp_rational_fn(K, pairs, criterion="total_degree"):
 
     * None of the points $u_i$ have denominators divisible by $p$.
     * The $u_i$ are distinct.
-    * That $0 \leq k < \mathrm{len}(\mathrm{pairs})$.
 
     EXAMPLES:
 
-    A nontrivial example.
+    A nontrivial example with an iterable of sample pairs:
 
-            sage: K = PolynomialRing(GF(97),"t").fraction_field()
+            sage: from sage_periods.reconstruction import cauchy_interp_rational_fn
+            sage: K = PolynomialRing(GF(97), "t").fraction_field()
             sage: t = K.gen()
             sage: Fp = K.base_ring()
-            sage: f = K.random_element()
-            sage: f
-            (70*t^2 + 38*t + 37)/(t^2 + 60*t + 8)
-            sage: u = [ Fp(i) for i in range(20)] 
-            sage: v = [f(u[i]) for i in range(20)]
-            sage: pairs = list(zip(u,v))
-            sage: cauchy_interp_rational_fn(K,pairs)
-            (70*t^2 + 38*t + 37)/(t^2 + 60*t + 8)        
+            sage: f = (t + 1)/(t + 2)
+            sage: u = [Fp(i) for i in range(5)]
+            sage: pairs = [(ui, f(ui)) for ui in u]
+            sage: cauchy_interp_rational_fn(K, iter(pairs))
+            (t + 1)/(t + 2)
 
-    A trivial example.
+    A trivial example:
 
-            sage: v = [Fp(0) for i in range(20)]
-            sage: pairs = list(zip(u,v))
-            sage: cauchy_interp_rational_fn(K,pairs)
+            sage: cauchy_interp_rational_fn(K, [(ui, Fp(0)) for ui in u])
             0
-            
-    Changing criteria can be useful, depending on the application.
 
-            sage: K = PolynomialRing(GF(97),"t").fraction_field()
-            sage: t = K.gen()
-            sage: Fp = K.base_ring()
-            sage: f = K.random_element()
-            sage: f
-            (77*t^2 + 59*t + 12)/(t^2 + 36*t + 1)
-            sage: u = [ Fp(i) for i in range(20)] # This will probably be larger than the degree of f.
-            sage: v = [f(u[i]) for i in range(20)]
-            sage: pairs = list(zip(u,v))
-            sage: cauchy_interp_rational_fn(K,pairs,criterion='total_degree')
-            (77*t^2 + 59*t + 12)/(t^2 + 36*t + 1)
-            sage: cauchy_interp_rational_fn(K,pairs,criterion='den_degree')
-            72*t^19 + 27*t^18 + 58*t^17 + 39*t^16 + 41*t^15 + 52*t^14 + 81*t^13 + 92*t^12 + 72*t^11 + 30*t^10 + 70*t^9 + 29*t^8 + 21*t^7 + 51*t^6 + 22*t^5 + 79*t^4 + 40*t^3 + 41*t^2 + 50*t + 12
+    The denominator-degree criterion can choose a polynomial instead:
+
+            sage: cauchy_interp_rational_fn(K, pairs, criterion="den_degree").denominator()
+            1
 
     """
 
@@ -157,6 +140,7 @@ class ReconstructionData:
 
     This record keeps exact samples, compressed test values, current rational reconstructions,
     the set of already used points, and a candidate once reconstruction has stabilized.
+    ``first_tick`` (optionally) sets the sample count for the first reconstruction attempt.
     """
     vals: dict = field(default_factory=dict)
     recons: dict = field(default_factory=dict)
@@ -210,6 +194,16 @@ class ReconstructionData:
         OUTPUT:
 
         * ``None`` -- This resets the ``ReconstructionData`` instance in place.
+
+        EXAMPLES:
+
+            sage: from sage_periods.reconstruction import ReconstructionData
+            sage: H = ReconstructionData()
+            sage: H.first_tick = 5
+            sage: H.points.add(1)
+            sage: H.reset()
+            sage: (H.first_tick, H.points)
+            (5, set())
         """
         self.vals = {}
         self.recons = {}
@@ -232,6 +226,7 @@ def recon_add_rat(H,val,point,xkey):
     INPUT:
 
     * ``H`` -- A ``ReconstructionData`` instance storing the state of the current evaluation/interpolation reconstruction.
+      Its value ``first_tick``, if set, schedules the first reconstruction attempt.
     * ``val`` -- A tuple of evaluated Sage matrices.
     * ``point`` -- The evaluation point of the parameter at which ``val`` was computed.
     * ``xkey`` -- A hashable key encoding the sampled basis pattern; only samples with the same key are combined.
@@ -245,6 +240,7 @@ def recon_add_rat(H,val,point,xkey):
 
     Nontrivial example:
 
+            sage: from sage_periods.reconstruction import ReconstructionData, recon_add_rat
             sage: K = PolynomialRing(GF(101), "t").fraction_field()
             sage: t = K.gen()
             sage: F = K.base_ring()
@@ -252,22 +248,18 @@ def recon_add_rat(H,val,point,xkey):
             sage: rho0_fun = matrix(K, [[t + 1], [2*t + 3]])
             sage: B_fun = matrix(K, [[1, t], [t**2, t + 2]])
             sage: def eval_matrix(M, u):
-            sage:     return matrix(F, M.nrows(), M.ncols(), [entry(u) for entry in M.list()])
-            sage: 
-            sage: H.candidate
-            None
+            ....:     return matrix(F, M.nrows(), M.ncols(), [entry(u) for entry in M.list()])
+            sage: H.candidate is None
+            True
             sage: # recon_add_rat only tries a full reconstruction after 1, 3, 6, 10, 15, ... samples.
             sage: # Using 15 points lets the stabilized reconstruction appear twice.
             sage: for u in range(15):
-            sage:     u_F = F(u)
-            sage:     rho0_eval = eval_matrix(rho0_fun, u_F)
-            sage:     B_eval = eval_matrix(B_fun, u_F)
-            sage:     recon_add_rat(H, (rho0_eval, B_eval), K(u), "fixed basis")
-            sage: 
-            sage: H.candidate
-            ([  t + 1]
-            [2*t + 3], [    1     t]
-            [  t^2 t + 2])
+            ....:     u_F = F(u)
+            ....:     rho0_eval = eval_matrix(rho0_fun, u_F)
+            ....:     B_eval = eval_matrix(B_fun, u_F)
+            ....:     recon_add_rat(H, (rho0_eval, B_eval), K(u), "fixed basis")
+            sage: H.candidate == (rho0_fun, B_fun)
+            True
             
     A trivial example.
 
@@ -276,8 +268,8 @@ def recon_add_rat(H,val,point,xkey):
             sage: H = ReconstructionData()
             sage: rho0_eval = matrix(F, 0, 1, [])
             sage: B_eval = matrix(F, 0, 0, [])
-            sage: H.candidate
-            None
+            sage: H.candidate is None
+            True
             sage: recon_add_rat(H, (rho0_eval, B_eval), K(0), "empty basis")
             sage: H.candidate is None
             True

@@ -41,20 +41,38 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
     * ``f`` -- A square-free polynomial representing the square-free denominator of the function under consideration.
     * ``r`` -- Order of the reduction $[\cdot]_r$ which we compute.
     * ``p`` -- The characteristic of the field which we evaluate ``a`` and ``f`` into to do our reductions.
-    * ``profile`` -- (Optional) A ``ProfileData`` object shared across primes and points, modified in place by this function.
-      implementing the "profile" variant of the MAGMA package for ``r = 2``.
-      It recors which syzygy staircase lifts contribute to our reduction,
-      so later points only enumerate those. Tremendous time-saver.
+    * ``profile`` -- (Optional) A ``ProfileData`` object shared across primes and
+      points. For ``r = 2``, controls recording and reuse of staircase lifts.
     
     * ``degree_hint`` -- (Optional) A sample count before the first reconstruction
       attempt; subsequent attempts occur at each new point. This is a scheduling
       hint only, and does not bypass the reconstruction stability check.
 
-    * ``staircase_keys`` -- (Optional) A set recording staircase cache keys used by a probe.
+    * ``staircase_keys`` -- (Optional) A set containing staircase cache keys 
+        used by a probe, updated throughout the computation.
+    * ``coefficient_data`` -- (Optional) Coefficient tables prepared by
+      ``prepare_coefficient_data(a, f)`` for reuse across primes.
+    * ``certify`` -- (Optional) If ``True``, also reconstruct reduction cofactors.
 
     OUTPUT: 
     
-    * $M$, $\rho_0(t)$ and $B(t)$ as described in Section 7.2 of Lairez 2016.
+    * ``rho0``, ``basis``, ``B`` -- The projection of $a$, its basis $M$, and
+      the Gauss-Manin matrix, as in Section 7.2 of Lairez 2016. If
+      ``certify=True``, a fourth value gives the reconstructed cofactor
+      dictionaries for the projection and matrix entries.
+
+    EXAMPLES:
+
+        sage: from sage_periods.pipeline import compute_gauss_manin_connection
+        sage: T = PolynomialRing(QQ, "t")
+        sage: A = PolynomialRing(T.fraction_field(), ["x0", "x1"])
+        sage: x0, x1 = A.gens()
+        sage: a, f = A(1), x0**2 + x1**2
+        sage: rho0, basis, B = compute_gauss_manin_connection(a, f, 1, 101)
+        sage: (rho0, basis, B)
+        ([1], [1], [0])
+        sage: len(compute_gauss_manin_connection(a, f, 1, 101, certify=True))
+        4
 
     """
     A = a.parent()
@@ -228,8 +246,9 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
 
     * ``rho0`` -- A Sage matrix over $GF(p)(t)$ representing the reconstructed class $\rho_0(t)$ in the basis $M$.
     * ``B`` -- A square Sage matrix over $GF(p)(t)$ representing the connection action on that basis.
-    * ``ensure_termination`` -- Boolean flag to decide whether to use rank specialization filter (no guarantee!)
-      or exact rank calculation over $\mathbb F_p(t)$ (guarantee!)
+    * ``ensure_termination`` -- If ``True``, calculate ranks exactly over
+      $\mathbb F_p(t)$. If ``False``, specialize to $\mathbb F_p$ and check rank there,
+      checking possible dependencies over $\mathbb F_p(t)$.
 
     OUTPUT:
 
@@ -240,12 +259,15 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
 
     A nontrivial example.
 
+            sage: from sage_periods.pipeline import compute_reductions_dependency
             sage: K = PolynomialRing(GF(7), "t").fraction_field()
             sage: t = K.gen()
             sage: rho0 = matrix(K, [[1]])
             sage: B = matrix(K, [[1/(t + 1)]])
             sage: # rho_1 = (t+1)^(-1) rho_0, so clearing denominators should give [1, t + 1]
-            sage: compute_reductions_dependency(rho0, B)
+            sage: compute_reductions_dependency(rho0, B, False)
+            [1, t + 1]
+            sage: compute_reductions_dependency(rho0, B, True)
             [1, t + 1]
             
     A trivial example.
@@ -254,7 +276,7 @@ def compute_reductions_dependency(rho0,B,ensure_termination):
             sage: rho0 = matrix(K, [[1]])
             sage: B = matrix(K, [[0]])
             sage: # rho_1 = 0, so we should get [0,1] as output
-            sage: compute_reductions_dependency(rho0, B)
+            sage: compute_reductions_dependency(rho0, B, True)
             [0, 1]
 
     """
