@@ -56,9 +56,65 @@ class LinearEngine:
 
     This is an internal class for sage_periods, and is not meant to be
     used directly.
+
+    INPUT:
+
+    * ``U`` -- ``RhamKoszulData`` over a prime finite field.
+
+    EXAMPLES:
+
+        sage: from sage_periods.rham_koszul import RhamKoszulData
+        sage: from sage_periods.linear_closure import LinearEngine
+        sage: A = PolynomialRing(GF(7), ['x0', 'x1']); x0, x1 = A.gens()
+        sage: U = RhamKoszulData(x0**2 + x1**2); E = LinearEngine(U)
+        sage: c = E.col((0, 0, 0, 0))
+        sage: (E.row_of_poly(U.xring.one()), E.row_deg({c: 1}))
+        ({0: 1}, 0)
+
+    TESTS:
+
+        sage: E.ensure_nf([c])
+        sage: E.nf_row({c: 1}) == E.ext_row({c: 1}) == {c: 1}
+        True
+        sage: E.step_image(c)
+        ((0,), (1,))
+        sage: E.elementary_reduction_step([{c: 1}])
+        [{0: 1}]
+        sage: basis, pivots = E.echelonize([{c: 1}], True)
+        sage: pivots
+        (0,)
+        sage: rows = [{c: 1}]; E.linear_normal_form(rows, basis)
+        sage: rows
+        [{}]
+        sage: E.syz_rows(0)
+        ([], [])
+        sage: E.compute_basis_U(0, 0)
+        sage: E.basis_U[(0, 0)]
+        []
+        sage: rows = [{c: 1}]; E.hom_reduce(rows, 1)
+        sage: rows
+        [{0: 1}]
+        sage: E.decode(E.encode(A.one()))
+        {(0, 0): 1}
+        sage: E.xkey((0, 0))
+        (0, (0, 0))
     """
 
     def __init__(self, U):
+        r"""Create a coefficient-row engine for ``U``.
+
+        INPUT:
+
+        * ``U`` -- ``RhamKoszulData`` over a prime finite field.
+
+        TESTS:
+
+            sage: from sage_periods.rham_koszul import RhamKoszulData
+            sage: from sage_periods.linear_closure import LinearEngine
+            sage: A = PolynomialRing(GF(7), ['x0', 'x1']); x0, x1 = A.gens()
+            sage: LinearEngine(RhamKoszulData(x0**2 + x1**2)).p
+            7
+        """
         self.U = U
         self.p = int(U.ring.base_ring().characteristic())
         self.vshift = U.vshift
@@ -106,6 +162,15 @@ class LinearEngine:
         Return the column of the encoded exponent tuple ``e``, creating it
         (with degree, sort key, exterior-derivative image and an unknown
         normal form) on first sight.
+
+        INPUT:
+
+        * ``e`` -- Exponent tuple in ``U.xring`` order.
+
+        OUTPUT:
+
+        * Integer column index for ``e``.
+
         """
         c = self.col_of.get(e)
         if c is not None:
@@ -145,6 +210,16 @@ class LinearEngine:
         exponent ``prefix`` prepended to every exponent (used to encode
         ``U.ring`` polynomials as topforms via prepending ``u^n*v^0``;
         this would be accomplished by setting ``prefix = (n, 0)``).
+
+        INPUT:
+
+        * ``poly`` -- Polynomial over the finite coefficient field.
+        * ``prefix`` -- (Optional) Exponents prepended to each term.
+
+        OUTPUT:
+
+        * Sparse row dictionary ``{column: coefficient}``.
+
         """
         col_get = self.col_of.get
         col_new = self.col
@@ -165,7 +240,17 @@ class LinearEngine:
         return row
 
     def row_deg(self, row):
-        r"""Total degree of a row (`-1` for the zero row, as for polynomials)."""
+        r"""Return the total degree of ``row``; ``-1`` for an empty row.
+
+        INPUT:
+
+        * ``row`` -- Sparse coefficient row.
+
+        OUTPUT:
+
+        * Integer degree.
+
+        """
         return max((self.deg[c] for c in row), default=-1)
 
     # ------------------------------------------------------------------
@@ -179,6 +264,15 @@ class LinearEngine:
         are supported on normal monomials only (i.e. they are the canonical
         reduced normal forms), independently of how much tail reduction
         Singular performed.
+
+        INPUT:
+
+        * ``cols`` -- Iterable of registered column indices.
+
+        OUTPUT:
+
+        * ``None``; normal forms are cached on this engine.
+
         """
         nf = self.nf
         exps = self.exps
@@ -247,7 +341,19 @@ class LinearEngine:
                 _flat(c)
 
     def nf_row(self, row):
-        r"""Canonical normal form of a row (callers batch ``ensure_nf`` first)."""
+        r"""Return the canonical normal form of ``row``.
+
+        Call ``ensure_nf`` on its columns first.
+
+        INPUT:
+
+        * ``row`` -- Sparse coefficient row.
+
+        OUTPUT:
+
+        * Reduced sparse row.
+
+        """
         p = self.p
         nf = self.nf
         out = {}
@@ -267,7 +373,17 @@ class LinearEngine:
     # linear steps
 
     def ext_row(self, row):
-        r"""Apply the encoded exterior derivative (a scaled column scatter)."""
+        r"""Apply the encoded exterior derivative to ``row``.
+
+        INPUT:
+
+        * ``row`` -- Sparse coefficient row.
+
+        OUTPUT:
+
+        * Sparse derivative row.
+
+        """
         p = self.p
         tgt = self.ext_tgt
         mul = self.ext_mul
@@ -280,7 +396,19 @@ class LinearEngine:
         return {k: r for k, v in out.items() if (r := v % p)}
 
     def step_image(self, c):
-        r"""Return the cached sparse image ``d(NF(c))`` of column ``c``."""
+        r"""Return the sparse reduction-step image of column ``c``.
+
+        Call ``ensure_nf`` on ``c`` first.
+
+        INPUT:
+
+        * ``c`` -- Registered column index.
+
+        OUTPUT:
+
+        * Pair of target-column and coefficient tuples.
+
+        """
         cached = self.step_arr.get(c)
         if cached is not None:
             return cached
@@ -316,6 +444,15 @@ class LinearEngine:
         complete step without materializing an intermediate normal form or
         performing a second derivative-scatter conversion.  Small batches
         retain the lower-overhead direct dictionary implementation.
+
+        INPUT:
+
+        * ``rows`` -- List of sparse coefficient rows.
+
+        OUTPUT:
+
+        * List of reduced derivative rows.
+
         """
         if not rows:
             return []
@@ -404,6 +541,17 @@ class LinearEngine:
         uses -- so pivots (and the output) coincide exactly with the
         polynomial implementation.  Returns a list of ``(row, pivot_column)``
         pairs, plus the pivot rows of the input when ``want_pivots`` is set.
+
+        INPUT:
+
+        * ``rows`` -- List of sparse coefficient rows.
+        * ``want_pivots`` -- (Optional) Also return input pivot-row indices.
+
+        OUTPUT:
+
+        * Echelon list of ``(row, pivot_column)`` pairs, optionally paired
+          with the pivot-row indices.
+
         """
         if not rows:
             return ([], []) if want_pivots else []
@@ -442,6 +590,16 @@ class LinearEngine:
         echelonized ``basis`` (a list of ``(row, pivot_column)`` pairs)
         from every row of ``rows`` -- the row version of
         ``linear_normal_form_p``.
+
+        INPUT:
+
+        * ``rows`` -- List of sparse rows, modified in place.
+        * ``basis`` -- Echelon list of ``(row, pivot_column)`` pairs.
+
+        OUTPUT:
+
+        * ``None``.
+
         """
         p = self.p
         pivot_rows = {pc: brow for brow, pc in basis}
@@ -476,6 +634,15 @@ class LinearEngine:
         filter as ``_basis_syzygies_with_lms``; a staircase lift is the
         exponent shift of a syzygy generator, so no polynomial products
         are formed.
+
+        INPUT:
+
+        * ``deg`` -- Requested syzygy degree.
+
+        OUTPUT:
+
+        * Pair of coefficient-row and leading-exponent lists.
+
         """
         from .rham_koszul import _syz_quotients
         U = self.U
@@ -516,6 +683,16 @@ class LinearEngine:
         Row version of ``basis_U``: fill the engine caches for the degree
         ``q`` slice at reduction order ``r``, recording pivot provenance for
         the profile exactly as the polynomial implementation does.
+
+        INPUT:
+
+        * ``r`` -- Nonnegative reduction order.
+        * ``q`` -- Degree of the requested slice.
+
+        OUTPUT:
+
+        * ``None``; ``basis_U[(r, q)]`` is populated.
+
         """
         if r < 0:
             raise ValueError("r must be non-negative")
@@ -563,6 +740,16 @@ class LinearEngine:
         Griffiths-Dwork step and, for ``r > 1``, eliminate against the
         precomputed slice $U^r_q$, lowering ``q`` by ``deg f`` each round.
         The list ``rows`` is rewritten in place.
+
+        INPUT:
+
+        * ``rows`` -- List of encoded coefficient rows, modified in place.
+        * ``r`` -- Positive reduction order.
+
+        OUTPUT:
+
+        * ``None``.
+
         """
         if not rows:
             return
@@ -582,7 +769,17 @@ class LinearEngine:
     # encode / decode
 
     def encode(self, poly):
-        r"""Row of ``tox(poly) * u^n`` for a polynomial of ``U.ring``."""
+        r"""Encode a polynomial of ``U.ring`` as a top-form row.
+
+        INPUT:
+
+        * ``poly`` -- Polynomial in ``U.ring``.
+
+        OUTPUT:
+
+        * Sparse coefficient row.
+
+        """
         return self.row_of_poly(poly, prefix=(self.U.dim, 0))
 
     def decode(self, row):
@@ -590,6 +787,15 @@ class LinearEngine:
         Row version of ``fromx``: keep the ``v``-free part, drop the ``u``
         exponent, and merge coefficients on equal ``x``-parts.  Keys of the
         result are exponent tuples of ``U.ring``.
+
+        INPUT:
+
+        * ``row`` -- Encoded coefficient row.
+
+        OUTPUT:
+
+        * Dictionary of ``U.ring`` exponent tuples to coefficients.
+
         """
         p = self.p
         out = {}
@@ -606,7 +812,17 @@ class LinearEngine:
         return out
 
     def xkey(self, e):
-        r"""Degrevlex sort key of an ``U.ring`` exponent tuple (cached)."""
+        r"""Return the cached degrevlex key of ``U.ring`` exponent tuple ``e``.
+
+        INPUT:
+
+        * ``e`` -- Exponent tuple of ``U.ring``.
+
+        OUTPUT:
+
+        * Sort key for ``e``.
+
+        """
         k = self._xskey_cache.get(e)
         if k is None:
             k = self._xskey_fn(ETuple(list(e)))
@@ -626,6 +842,26 @@ def engine_gauss_manin_helper(U, der, L, ret=None):
 
     This is an internal function for sage_periods, and is not meant to be
     called by the user.
+
+    INPUT:
+
+    * ``U`` -- ``RhamKoszulData`` over a prime finite field.
+    * ``der`` -- Connection polynomial in ``U.ring``.
+    * ``L`` -- Starting polynomials in ``U.ring``.
+    * ``ret`` -- (Optional) ``RKGaussManinData`` record to fill.
+
+    OUTPUT:
+
+    * An ``RKGaussManinData`` record with basis, projection, and action matrix.
+
+    TESTS:
+
+        sage: from sage_periods.rham_koszul import RhamKoszulData
+        sage: from sage_periods.linear_closure import engine_gauss_manin_helper
+        sage: A = PolynomialRing(GF(7), ['x0', 'x1']); x0, x1 = A.gens()
+        sage: U = RhamKoszulData(x0**2 + x1**2)
+        sage: engine_gauss_manin_helper(U, A.one(), [A.one()]).basis
+        [1]
     """
     from .rham_koszul import RKGaussManinData
 

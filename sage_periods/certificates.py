@@ -13,7 +13,7 @@ class PeriodCertificate:
     Container for a partial certificate in the sense of Lairez 2016,
     Section 7.3.
 
-    Fields:
+    INPUT:
 
     * ``a``, ``f`` -- the prepared homogeneous numerator and
       denominator, as polynomials over $\QQ(t)$;
@@ -31,6 +31,17 @@ class PeriodCertificate:
     * ``operator_coefficients`` -- the dense coefficient list
       $[c_0, \dots, c_m]$ of the certified operator
       $L = \sum_k c_k \delta^k$;
+
+    EXAMPLES:
+
+        sage: from sage_periods.certificates import PeriodCertificate
+        sage: K = PolynomialRing(QQ, 't').fraction_field()
+        sage: A = PolynomialRing(K, ['x0', 'x1'])
+        sage: x0, x1 = A.gens()
+        sage: cert = PeriodCertificate(x0*x1, x0*x1, ((0, 0),), [1],
+        ....:     matrix(K, [[0]]), {(1, 1, 1, 0): 1}, [{}], [0, 1])
+        sage: cert.operator_coefficients
+        [0, 1]
     """
     a: object
     f: object
@@ -68,6 +79,7 @@ def verify_certificate(cert):
 
     A hand-built certificate for the constant period of $1/(x_0x_1)$:
 
+        sage: from sage_periods.certificates import PeriodCertificate, verify_certificate
         sage: K.<t> = FractionField(PolynomialRing(QQ, 't'))
         sage: A.<x0, x1> = PolynomialRing(K)
         sage: cert = PeriodCertificate(x0*x1, x0*x1, ((0, 0),), [1],

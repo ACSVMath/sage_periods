@@ -11,36 +11,100 @@ r"""Handling of errors occurring /passed across multiple files (rham_koszul, pip
 
 
 class SagePeriodsError(Exception):
-    """Base class for package computation errors."""
+    r"""Base class for package computation errors.
+
+    TESTS:
+
+        sage: from sage_periods.errors import SagePeriodsError
+        sage: str(SagePeriodsError('failed'))
+        'failed'
+    """
     pass
 
 # Typical usage:
 # raise BadPrimeError(message="Prime fails normalization checks in CRT", prime=7, stage="lifting") from exc
 class BadPrimeError(SagePeriodsError):
-    """The current prime cannot be used."""
+    r"""Signal that the current prime cannot be used for the computation.
+
+    The ``prime`` and ``stage`` attributes identify the failed attempt.
+
+    TESTS:
+
+        sage: from sage_periods.errors import BadPrimeError
+        sage: e = BadPrimeError('bad prime', 7, 'lifting')
+        sage: (e.prime, e.stage)
+        (7, 'lifting')
+    """
     def __init__(self, message, prime, stage): # stage: "gauss_manin", "dependency", "lifting"
+        r"""Create error for ``prime`` at ``stage``.
+
+        INPUT:
+
+        * ``message`` -- Explanation of the failure.
+        * ``prime`` -- Rejected prime.
+        * ``stage`` -- Stage name, e.g. ``"lifting"``.
+
+        TESTS:
+
+            sage: from sage_periods.errors import BadPrimeError
+            sage: BadPrimeError('bad', 7, 'lifting').prime
+            7
+        """
         super().__init__(message)
         self.prime = prime
         self.stage = stage
     pass
 
 class NeedMorePrimesError(SagePeriodsError):
-    """Either we pruned out too many primes in CRT, or need more to rationally reconstruct. Get more primes."""
+    r"""Signal that we either:
+        - pruned out too many primes in CRT, or 
+        - need more to rationally reconstruct. 
+    So we should get more primes.
+
+    TESTS:
+
+        sage: from sage_periods.errors import NeedMorePrimesError, SagePeriodsError
+        sage: isinstance(NeedMorePrimesError('more primes'), SagePeriodsError)
+        True
+    """
     def __init__(self, message):
+        r"""Create error with explanatory ``message``.
+
+        TESTS:
+
+            sage: from sage_periods.errors import NeedMorePrimesError
+            sage: str(NeedMorePrimesError('more primes'))
+            'more primes'
+        """
         super().__init__(message)
     pass
 
 class ReductionOrderTooSmallError(SagePeriodsError):
-    """The reduction escaped the expected filtration bound."""
+    r"""Signal that reduction order ``r`` is too small.
+
+    Attempted order is available as ``r``.
+
+    TESTS:
+
+        sage: from sage_periods.errors import ReductionOrderTooSmallError
+        sage: ReductionOrderTooSmallError('increase order', 2).r
+        2
+    """
     def __init__(self, message, r):
+        r"""Create error for attempted reduction order ``r``.
+
+        INPUT:
+
+        * ``message`` -- Explanation of the failure.
+        * ``r`` -- Attempted order.
+
+        TESTS:
+
+            sage: from sage_periods.errors import ReductionOrderTooSmallError
+            sage: str(ReductionOrderTooSmallError('increase order', 2))
+            'increase order'
+        """
         super().__init__(message)
         self.r = r
     pass
 
-# !!! NOT NEEDED
-# class ProbeBasisCapExceededError(SagePeriodsError):
-#     """A probe exceeded its permitted basis size."""
-#     # TODO
-#     pass
-
-# Other possiblities: failed certification?

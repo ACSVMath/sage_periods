@@ -8,7 +8,7 @@ from sage.misc.misc_c import prod
 from sage.arith.misc import random_prime
 
 # sage_periods imports
-from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, prepare_coefficient_data
+from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, _prepare_coefficient_data
 from .errors import BadPrimeError, ReductionOrderTooSmallError
 from .profiling import ProfileData
 from .reconstruction import reconstruction_degree_hint
@@ -208,17 +208,27 @@ def compute_prepared_fraction(R,t = None):
 
 def minimize_denominator_degree(R, xgens, rounds=3, concurrent=10, time_cap=30.0):
     r"""
-    Torus (monomial) change of variables lowering the denominator degree.
+    Torus (monomial) change of variables possibly lowering the denominator degree.
 
-    A random walk over the unimodular substitutions $x_i \mapsto 1/x_i$ and
-    $x_i \mapsto x_i x_j^{\pm 1}$ ($x_i, x_j$ in ``xgens``), applied to the
-    $dx/x$-normalized integrand $h = R\,\prod_{x_i \in xgens} x_i$, keeping a
-    pool of the best candidates and stopping after ``rounds`` rounds without
-    improvement (or after ``time_cap`` seconds).  Returns the transformed
-    integrand $h'/\prod_{x_i \in xgens} x_i$, or ``R`` itself if no
-    improvement was found.
+    INPUT:
 
-    ``concurrent'' measures how many items we should keep in our pool concurrently.
+    * ``R`` -- Rational period integrand.
+    * ``xgens`` -- Torus variables to transform.
+    * ``rounds`` -- (Optional) Stop after this many rounds without improvement; default ``3``.
+    * ``concurrent`` -- (Optional) Number of candidates retained per round; default ``10``.
+    * ``time_cap`` -- (Optional) Time limit in seconds; default ``30.0``.
+
+    OUTPUT:
+
+    * A transformed rational integrand, or ``R`` if no improvement is found.
+
+    EXAMPLES:
+
+        sage: from sage_periods.preparation import minimize_denominator_degree
+        sage: A = PolynomialRing(QQ, ['x', 'y']); x, y = A.gens()
+        sage: K = A.fraction_field()
+        sage: minimize_denominator_degree(K.zero(), [x, y]) == 0
+        True
 
     This is an internal function for sage_periods, and is not meant to be
     called by the user.
@@ -296,17 +306,34 @@ def minimize_denominator_degree(R, xgens, rounds=3, concurrent=10, time_cap=30.0
 
 
 def _min_exponent(exps):
-    r"""Componentwise minimum of a nonempty tuple of exponent vectors."""
+    r"""Componentwise minimum of a nonempty tuple of exponent vectors.
+
+    TESTS:
+
+        sage: from sage_periods.preparation import _min_exponent
+        sage: _min_exponent(((2, 3), (1, 5)))
+        (1, 3)
+    """
     return tuple(min(col) for col in zip(*exps))
 
 
 def _denominator_degree(st, torus):
     r"""
     Total degree of the reduced denominator of $h/\prod_{torus} x_i$, where
-    ``st = (num_exps, den_exps)`` are the (Laurent) supports of a coprime
-    numerator/denominator pair $P, Q$ of $h$. Writing $P = x^{m_P} P'$ and
-    $Q = x^{m_Q} Q'$ with $P', Q'$ coprime polynomials free of monomial
-    factors, the reduced denominator is $Q' x^{\max(0,\, torus - m_P + m_Q)}$.
+    ``st = (num_exps, den_exps)`` are the Laurent supports of a coprime
+    numerator/denominator pair $P, Q$ of $h$.
+    ``torus`` is a tuple of 0s and 1s marking which polynomial-ring variables 
+    are in ``xgens`` (of ``minimize_denominator_degree``).
+
+    OUTPUT:
+
+    * The resulting denominator's total degree.
+
+    TESTS:
+
+        sage: from sage_periods.preparation import _denominator_degree
+        sage: _denominator_degree(((((0, 0),), ((1, 0),))), (0, 0))
+        1
     """
     num_exps, den_exps = st
     num_min, den_min = _min_exponent(num_exps), _min_exponent(den_exps)
@@ -317,22 +344,32 @@ def _denominator_degree(st, torus):
 
 def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None, coefficient_data=None):
     r"""
-    Probe r=1 and r=2 concurrently in separate single-process workers.
-    Allow at most 30 seconds for r=2; r=1 has no timeout. Both start at
-    the same prime, with independent bad-prime retries.
-    Return ``(reduction_order, seed, degree_hint)``,
-    where ``reduction_order`` is optimal choice of ``r`` and
-    ``seed`` is a dict ``{prime: coeffs}`` for an operator modulo one prime.
-    If ``r = 2`` is chosen, the ``ProfileData`` object ``profile`` (if given)
-    is overwritten in place with the profile gathered by the ``r = 2`` probe;
-    otherwise it is left unchanged. The returned degree hint schedules later
-    reconstruction attempts. Only staircase entries used by the winning
-    worker's successful attempt are imported into the parent's cache. Optional
-    ``coefficient_data`` supplies precomputed characteristic-zero coefficient
-    tables; otherwise they are prepared once here and shared with both workers.
+    Probe reduction orders 1 and 2 for a prepared fraction.
+
+    INPUT:
+
+    * ``a``, ``f`` -- Prepared homogeneous numerator and denominator over $\QQ(t)$.
+    * ``ensure_termination`` -- If ``True``, use exact rank checks in Stage 2.
+    * ``ncpus`` -- (Optional) Accepted for compatibility; currently unused.
+    * ``profile`` -- (Optional) ``ProfileData`` updated if order 2 is selected.
+    * ``coefficient_data`` -- (Optional) Tables from ``_prepare_coefficient_data(a, f)``.
+
+    OUTPUT:
+
+    * ``(r, seed, degree_hint)``: chosen order, a dictionary of modular
+      operator coefficients indexed by prime, and a reconstruction scheduling hint.
+
+    EXAMPLES:
+
+        sage: from sage_periods.preparation import probe_reduction_order
+        sage: K = PolynomialRing(QQ, 't').fraction_field()
+        sage: A = PolynomialRing(K, ['x0', 'x1']); x0, x1 = A.gens()
+        sage: r, seed, hint = probe_reduction_order(A.one(), x0**2 + x1**2, True)
+        sage: (r, len(seed), hint)
+        (1, 1, 3)
     """
     if coefficient_data is None:
-        coefficient_data = prepare_coefficient_data(a, f)
+        coefficient_data = _prepare_coefficient_data(a, f)
     context = multiprocessing.get_context()
     first_prime = random_prime(2**26 - 1, proof=True, lbound=2**23)
 
@@ -391,7 +428,7 @@ def probe_reduction_order(a, f, ensure_termination, ncpus=None, profile=None, co
 
 # ~~ BOILERPLATE ~~
 def _probe_reduction_order_worker(*args):
-    """Transport errors whose constructors require more than Exception.args."""
+    r"""Run one probe and transport its result or error."""
     try:
         return True, _probe_reduction_order_helper(*args)
     except Exception as exc:
@@ -399,7 +436,13 @@ def _probe_reduction_order_worker(*args):
 
 
 def _probe_worker_result(pending, timeout=None):
-    """Unpack a worker result while preserving typed errors and their fields."""
+    r"""Unpack a worker result while preserving typed errors and their fields.
+
+    INPUT:
+
+    * ``pending`` -- Worker result object with a ``get`` method.
+    * ``timeout`` -- (Optional) Maximum wait in seconds.
+    """
     success, result = pending.get(timeout=timeout)
     if success:
         return result
@@ -415,7 +458,7 @@ def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None,
     r"""Compute one modular probe and its comparison score."""
     p = first_prime
     if coefficient_data is None:
-        coefficient_data = prepare_coefficient_data(a, f)
+        coefficient_data = _prepare_coefficient_data(a, f)
 
     for attempt in range(5):
         if p is None:
@@ -474,5 +517,4 @@ def _probe_reduction_order_helper(a, f, r, ensure_termination, first_prime=None,
                 return None
 
             raise
-
 

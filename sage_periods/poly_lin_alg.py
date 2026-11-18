@@ -6,10 +6,24 @@ from sage.matrix.constructor import Matrix
 from sage.matrix.special import identity_matrix
 
 class ReducedElement(NamedTuple):
-    """Value and cofactor in ``U.xring``; ``None`` means untracked.
+    r"""Pair a polynomial value with an optional encoded cofactor.
 
     A tracked cofactor is a polynomial or a ``CofactorCombination``; read it
-    with ``as_polynomial``."""
+    with ``as_polynomial``.
+
+    INPUT:
+
+    * ``value`` -- Encoded polynomial value.
+    * ``cofactor`` -- (Optional) Encoded polynomial or ``CofactorCombination``;
+      ``None`` means untracked.
+
+    EXAMPLES:
+
+        sage: from sage_periods.poly_lin_alg import ReducedElement
+        sage: R = PolynomialRing(QQ, ['x', 'y']); x, y = R.gens()
+        sage: ReducedElement(x).cofactor is None
+        True
+    """
     value: object
     cofactor: object | None = None
 
@@ -23,20 +37,60 @@ class CofactorCombination:
     Expanding every echelon row would make each cofactor dense over all
     cofactor monomials of the slice; ``linear_normal_form_p`` instead combines
     the coefficient vectors and expands once per target.
+
+    INPUT:
+
+    * ``coeffs`` -- Coefficient vector.
+    * ``gens`` -- List of encoded polynomial cofactors.
+
+    EXAMPLES:
+
+        sage: from sage_periods.poly_lin_alg import CofactorCombination
+        sage: R = PolynomialRing(QQ, ['x', 'y']); x, y = R.gens()
+        sage: c = CofactorCombination(vector(QQ, [2, 3]), [x, y])
+        sage: c.polynomial()
+        2*x + 3*y
     """
     __slots__ = ("coeffs", "gens", "_poly")
 
     def __init__(self, coeffs, gens):
+        r"""Store ``coeffs`` over cofactor list ``gens``.
+
+        INPUT:
+
+        * ``coeffs`` -- Coefficient vector.
+        * ``gens`` -- Encoded polynomial cofactors.
+
+        TESTS:
+
+            sage: from sage_periods.poly_lin_alg import CofactorCombination
+            sage: c = CofactorCombination(vector(QQ, [1]), [PolynomialRing(QQ, ['x', 'y']).one()])
+            sage: len(c.gens)
+            1
+        """
         self.coeffs, self.gens, self._poly = coeffs, gens, None
 
     def polynomial(self):
+        r"""Expand combination to an encoded polynomial.
+
+        OUTPUT:
+
+        * The sum of ``coeffs[i] * gens[i]``.
+
+        TESTS:
+
+            sage: from sage_periods.poly_lin_alg import CofactorCombination
+            sage: R = PolynomialRing(QQ, ['x', 'y']); x, y = R.gens()
+            sage: CofactorCombination(vector(QQ, [1, 2]), [x, y]).polynomial()
+            x + 2*y
+        """
         if self._poly is None:
             self._poly = _combine(self.coeffs, self.gens)
         return self._poly
 
 
 def _combine(coeffs, gens):
-    """Return ``sum(coeffs[i] * gens[i])`` for a vector ``coeffs``."""
+    r"""Return ``sum(coeffs[i] * gens[i])`` for a vector ``coeffs``."""
     out = gens[0].parent().zero()
     for i in coeffs.nonzero_positions():
         out += coeffs[i] * gens[i]
@@ -44,7 +98,23 @@ def _combine(coeffs, gens):
 
 
 def as_polynomial(cofactor):
-    """Expand a tracked cofactor (a polynomial or a ``CofactorCombination``)."""
+    r"""Return a tracked cofactor as a polynomial.
+
+    INPUT:
+
+    * ``cofactor`` -- An encoded polynomial or ``CofactorCombination``.
+
+    OUTPUT:
+
+    * The encoded polynomial.
+
+    EXAMPLES:
+
+        sage: from sage_periods.poly_lin_alg import CofactorCombination, as_polynomial
+        sage: R = PolynomialRing(QQ, ['x', 'y']); x, y = R.gens()
+        sage: as_polynomial(CofactorCombination(vector(QQ, [1, 2]), [x, y]))
+        x + 2*y
+    """
     if isinstance(cofactor, CofactorCombination):
         return cofactor.polynomial()
     return cofactor

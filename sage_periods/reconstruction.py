@@ -390,7 +390,23 @@ def recon_add_rat(H,val,point,xkey):
 
 
 def reconstruction_degree_hint(*matrices):
-    """Sample-count estimate; acceptance still requires reconstruction stability."""
+    r"""Sample-count estimate; acceptance still requires reconstruction stability.
+
+    INPUT:
+
+    * ``matrices`` -- Reconstructed matrices over a rational-function field.
+
+    OUTPUT:
+
+    * A positive sample count; acceptance still requires stability.
+
+    EXAMPLES:
+
+        sage: from sage_periods.reconstruction import reconstruction_degree_hint
+        sage: K = PolynomialRing(GF(7), 't').fraction_field()
+        sage: reconstruction_degree_hint(matrix(K, [[1]]))
+        3
+    """
     entries = [c for M in matrices for c in M.list() if c]
     degsum = max((c.numerator().degree() + c.denominator().degree()
                   for c in entries), default=0)
@@ -430,14 +446,38 @@ class CRTLifter:
     """
 
     def __init__(self):
-        r"""Create an empty accumulator."""
+        r"""Create empty CRT accumulator.
+
+        TESTS:
+
+            sage: from sage_periods.reconstruction import CRTLifter
+            sage: CRTLifter().majority_primes()
+            frozenset()
+        """
         self.classes = {}   # shape -> {"modulus", "residues", "primes"}
         self.shape_of = {}  # prime -> shape of the class it was folded into
 
     def fold(self, p, residues, shape):
         r"""
-        Fold the residues ``residues`` (integers modulo ``p``) into the class ``shape``.
+        Fold residues ``residues`` (integers modulo ``p``) into class ``shape``.
         Folding a prime twice has no effect.
+
+        INPUT:
+
+        * ``p`` -- Prime modulus.
+        * ``residues`` -- Integer residue vector modulo ``p``.
+        * ``shape`` -- Hashable class key for compatible vectors.
+
+        OUTPUT:
+
+        * ``None``; the accumulator is updated in place.
+
+        TESTS:
+
+            sage: from sage_periods.reconstruction import CRTLifter
+            sage: L = CRTLifter(); L.fold(7, [1], ('one',))
+            sage: L.class_of(7)
+            ('one',)
         """
         p = ZZ(p)
         if p in self.shape_of:
@@ -465,7 +505,17 @@ class CRTLifter:
         self.shape_of[p] = shape
 
     def _majority(self):
-        r"""Return ``(shape, class)`` for the class with the most primes (first-inserted on ties)."""
+        r"""Return the shape and class with the most primes.
+
+        The first inserted class wins ties.
+
+        TESTS:
+
+            sage: from sage_periods.reconstruction import CRTLifter
+            sage: L = CRTLifter(); L.fold(7, [1], ('one',))
+            sage: L._majority()[0]
+            ('one',)
+        """
         return max(self.classes.items(), key=lambda kv: len(kv[1]["primes"]))
 
     def lift_majority(self):
@@ -477,6 +527,17 @@ class CRTLifter:
         * ``(shape, values, primes)`` with ``values`` a list of rationals and ``primes``
           the frozenset of primes in that class. Raises ``NeedMorePrimesError`` if no prime
           has been folded yet or if rational reconstruction fails for some entry.
+
+        TESTS:
+
+            sage: from sage_periods.reconstruction import CRTLifter
+            sage: from sage_periods.errors import NeedMorePrimesError
+            sage: L = CRTLifter()
+            sage: try:
+            ....:     L.lift_majority()
+            ....: except NeedMorePrimesError:
+            ....:     print('more primes needed')
+            more primes needed
         """
         if not self.classes:
             raise NeedMorePrimesError("No accumulated primes. Need more primes...")
@@ -493,11 +554,32 @@ class CRTLifter:
         return shape, out, frozenset(c["primes"])
 
     def class_of(self, p):
-        r"""Return the shape of the class that ``p`` was folded into, or ``None``."""
+        r"""Return the shape of the class containing ``p``, or ``None``.
+
+        INPUT:
+
+        * ``p`` -- Prime to look up.
+
+        TESTS:
+
+            sage: from sage_periods.reconstruction import CRTLifter
+            sage: CRTLifter().class_of(7) is None
+            True
+        """
         return self.shape_of.get(ZZ(p))
 
     def majority_primes(self):
-        r"""Return the frozenset of primes in the majority class (empty if nothing was folded)."""
+        r"""Return the primes in the majority class as a frozenset.
+
+        An empty accumulator gives an empty frozenset.
+
+        TESTS:
+
+            sage: from sage_periods.reconstruction import CRTLifter
+            sage: L = CRTLifter(); L.fold(7, [1], ('one',))
+            sage: L.majority_primes()
+            frozenset({7})
+        """
         if not self.classes:
             return frozenset()
         return frozenset(self._majority()[1]["primes"])
@@ -514,6 +596,15 @@ def operator_residues(coeffs):
     if the list is empty or its leading polynomial is zero.
 
     This is an internal function for sage_periods, and is not meant to be called by the user.
+
+    INPUT:
+
+    * ``coeffs`` -- Dense modular operator coefficients in $GF(p)[t]$.
+
+    OUTPUT:
+
+    * ``(shape, residues)`` with ``shape = (length, degree_tuple)`` and a
+      dense list of integer residues.
 
     EXAMPLES:
 
@@ -539,6 +630,16 @@ def operator_from_lift(t, shape, values):
     Rebuild the $\mathbb{Q}[t]$ coefficient list from ``operator_residues`` data
     (``shape``, and the lifted rational ``values``).
 
+    INPUT:
+
+    * ``t`` -- Parameter variable name.
+    * ``shape`` -- Shape returned by ``operator_residues``.
+    * ``values`` -- Lifted rational coefficients in residue order.
+
+    OUTPUT:
+
+    * A dense list of operator coefficients in $\QQ[t]$.
+
     EXAMPLES:
 
             sage: from sage_periods.reconstruction import operator_from_lift
@@ -559,13 +660,45 @@ def operator_from_lift(t, shape, values):
 
 
 def operator_residue_count(shape):
-    r"""Number of residues described by an ``operator_residues`` shape."""
+    r"""Count residues described by an ``operator_residues`` shape.
+
+    INPUT:
+
+    * ``shape`` -- ``(length, degree_tuple)`` from ``operator_residues``.
+
+    OUTPUT:
+
+    * The number of scalar residues.
+
+    TESTS:
+
+        sage: from sage_periods.reconstruction import operator_residue_count
+        sage: operator_residue_count((3, (1, -1, 0)))
+        3
+    """
     _, degs = shape
     return sum(d + 1 for d in degs if d >= 0)
 
 
 def ratfun_residues(entries):
-    """Encode rational functions over GF(p)(t) for coherent CRT lifting."""
+    r"""Encode rational functions over $GF(p)(t)$ for CRT lifting.
+
+    INPUT:
+
+    * ``entries`` -- Iterable of rational functions over one $GF(p)(t)$.
+
+    OUTPUT:
+
+    * ``(shape, residues)`` with numerator and denominator degrees per entry,
+      and their dense integer coefficient lists.
+
+    TESTS:
+
+        sage: from sage_periods.reconstruction import ratfun_residues
+        sage: K = PolynomialRing(GF(7), 't').fraction_field(); t = K.gen()
+        sage: ratfun_residues([t + 1])
+        (((1, 0),), [1, 1, 1])
+    """
     shape, residues = [], []
     for x in entries:
         num, den = x.numerator(), x.denominator()
@@ -579,7 +712,24 @@ def ratfun_residues(entries):
 
 
 def ratfuns_from_lift(t, shape, values):
-    """Decode rational functions lifted from ``ratfun_residues`` data."""
+    r"""Decode rational functions lifted from ``ratfun_residues`` data.
+
+    INPUT:
+
+    * ``t`` -- Parameter variable name.
+    * ``shape`` -- Degree pairs from ``ratfun_residues``.
+    * ``values`` -- Lifted rational coefficients in residue order.
+
+    OUTPUT:
+
+    * A list of rational functions over $\QQ(t)$.
+
+    TESTS:
+
+        sage: from sage_periods.reconstruction import ratfuns_from_lift
+        sage: ratfuns_from_lift('t', ((1, 0),), [1, 1, 1])
+        [t + 1]
+    """
     R = PolynomialRing(QQ, str(t))
     K = R.fraction_field()
     out, offset = [], 0

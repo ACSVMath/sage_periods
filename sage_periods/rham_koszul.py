@@ -214,6 +214,19 @@ class RhamKoszulData:
         Return this fibre's candidate profile ``(tsyzlms, syzgen_lms, syzlms)``,
         to be passed to ``ProfileData.add_profile_candidate`` once the
         Gauss-Manin computation at this point has succeeded.
+
+        OUTPUT:
+
+        * A tuple of trivial-syzygy leading exponents, syzygy-generator
+          leading exponents, and a frozenset of contributing lift exponents.
+
+        TESTS:
+
+            sage: from sage_periods.rham_koszul import RhamKoszulData
+            sage: A = PolynomialRing(QQ, ['x0', 'x1']); x0, x1 = A.gens()
+            sage: U = RhamKoszulData(x0**2 + x1**2)
+            sage: U.profile_candidate()[2] == frozenset()
+            True
         """
         return (self.tsyzlm_exps, self.syzlm_exps, frozenset(self.used_syzlms))
         
@@ -336,7 +349,17 @@ def _syz_quotients(U, deg):
     This is an internal function for sage_periods, and is not meant to be
     called by the user.
 
-    TODO: How will this integrate with profiling?
+    OUTPUT:
+
+    * ``(quotients, syzlm_exps)`` as described above.
+
+    TESTS:
+
+        sage: from sage_periods.rham_koszul import RhamKoszulData, _syz_quotients
+        sage: A = PolynomialRing(QQ, ['x0', 'x1']); x0, x1 = A.gens()
+        sage: U = RhamKoszulData(x0**2 + x1**2)
+        sage: isinstance(_syz_quotients(U, 0), tuple)
+        True
     """
     # The staircase walk below depends only on the leading monomials of the
     # syzygy Groebner basis and of the trivial syzygy module, not on their
@@ -722,6 +745,17 @@ def _hom_reduce_helper(U, L, r):
 
     * ``None`` -- No direct return value. The list ``L`` is rewritten in place by
       its reduced encoded representatives.
+
+    TESTS:
+
+        sage: from sage_periods.rham_koszul import RhamKoszulData, _hom_reduce_helper
+        sage: from sage_periods.poly_lin_alg import ReducedElement
+        sage: A = PolynomialRing(QQ, ['x0', 'x1']); x0, x1 = A.gens()
+        sage: U = RhamKoszulData(x0**2 + x1**2)
+        sage: L = [ReducedElement(U.xring.one())]
+        sage: _hom_reduce_helper(U, L, 1)
+        sage: L[0].value
+        1
     """
     if len(L) == 0:
         return None
@@ -811,7 +845,7 @@ def hom_reduce(U, L, r):
 
 
 def _reduced_elements(U, polynomials, r):
-    """Reduce ordinary polynomials and retain their encoded cofactors."""
+    r"""Reduce ordinary polynomials and retain their encoded cofactors."""
     enc = [ReducedElement(U.tox(p) * U.gens[0],
                           U.xring.zero() if U.certify else None)
            for p in polynomials]

@@ -21,10 +21,31 @@ from sage.misc.verbose import verbose
 
 def normalize_diagonal_arguments(R, r = None, vari = None, Dt = None, t = None):
     r"""
-        Runs input validation of arguments passed into compute_diagonal_annihilator.
-        Then it makes sure that all of R,r,vari,Dt,t are defined and of the correct format to be processed by diagonal_to_period.
+    Runs input validation of arguments passed into ``compute_diagonal_annihilator``,
+    then makes sure that all of ``R,r,vari,Dt,t`` are defined and of the correct 
+    format to be processed by ``diagonal_to_period``.
 
-        TODO
+    INPUT:
+
+    * ``R`` -- A symbolic or polynomial rational function.
+    * ``r`` -- (Optional) List of positive integers giving the diagonal direction;
+      defaults to all ones.
+    * ``vari`` -- (Optional) Variables in the order corresponding to ``r``.
+    * ``Dt`` -- (Optional) Derivative symbol; requires ``t`` when supplied.
+    * ``t`` -- (Optional) Series variable; defaults to a symbolic ``t``.
+
+    OUTPUT:
+
+    * ``(R, r, vari, Dt, t)`` with symbolic ``R`` and the smallest entry of
+      ``r`` first, with the same permutation applied to ``vari``.
+
+    EXAMPLES:
+
+        sage: from sage_periods.diagonal import normalize_diagonal_arguments
+        sage: x, y = var('x y')
+        sage: R, r, vari, Dt, t = normalize_diagonal_arguments(1/(1-x-y), [2, 1], [x, y])
+        sage: (r, vari, Dt, t)
+        ([1, 2], [y, x], 'Dt', t)
     """
 
     # Basics checks and argument processing
@@ -90,6 +111,27 @@ def normalize_diagonal_arguments(R, r = None, vari = None, Dt = None, t = None):
     return R, r, vari, Dt, t
 
 def diagonal_to_period(R, r, vari , t):
+    r"""Convert normalized diagonal arguments to a period integrand,
+    via the standard transformation.
+
+    INPUT:
+
+    * ``R`` -- Symbolic rational function.
+    * ``r`` -- Positive integer direction, with its smallest entry first.
+    * ``vari`` -- Variables ordered to match ``r``.
+    * ``t`` -- Series variable.
+
+    OUTPUT:
+
+    * A symbolic rational period integrand.
+
+    EXAMPLES:
+
+        sage: from sage_periods.diagonal import diagonal_to_period
+        sage: x, y, t = var('x y t')
+        sage: diagonal_to_period(1/(1-x-y), [1, 1], [x, y], t)
+        -1/((y + t/y - 1)*y)
+    """
     # Takes symbolic R and direction-variable order pair (r,vari) and converts this to the period integrand of the corresponding diagonal in t,
     # ...applying a RoU filter, if necessary.
 
@@ -146,6 +188,29 @@ def minimize_diagonal_annihilator(L, P, Q, r, t,ncpus=1):
 
     This is an internal function for sage_periods, and is not meant to be
     called by the user.
+
+    INPUT:
+
+    * ``L`` -- An annihilating differential operator for the diagonal.
+    * ``P``, ``Q`` -- Numerator and denominator polynomials over $\QQ$.
+    * ``r`` -- Positive integer diagonal direction.
+    * ``t`` -- Series variable (currently unused).
+    * ``ncpus`` -- (Optional) Number of workers passed to ``ore_algebra.guess``.
+
+    OUTPUT:
+
+    * A certified lower-order right factor when found; otherwise ``L``.
+
+    EXAMPLES:
+
+        sage: from sage_periods.diagonal import minimize_diagonal_annihilator
+        sage: from sage_periods import _is_ore_algebra_installed
+        sage: if _is_ore_algebra_installed:  # optional - ore_algebra
+        ....:     from ore_algebra import OreAlgebra
+        ....:     A = OreAlgebra(PolynomialRing(QQ, 't'), 'Dt')
+        ....:     X = PolynomialRing(QQ, ['x', 'y'])
+        ....:     minimize_diagonal_annihilator(A.gen(), X.one(), X.one(), [1, 1], 't') == A.gen()
+        True
     """
 
     if not _is_ore_algebra_installed:
@@ -262,6 +327,23 @@ def diagonal_series_terms(P, Q, r, N):
 
     This is an internal function for sage_periods, and is not meant to be
     called by the user.
+
+    INPUT:
+
+    * ``P``, ``Q`` -- Polynomials over $\QQ$ in the same variables, with $Q(0)\ne 0$.
+    * ``r`` -- Positive integer diagonal direction.
+    * ``N`` -- Number of coefficients, starting at degree zero.
+
+    OUTPUT:
+
+    * A list of ``N`` rational diagonal coefficients.
+
+    EXAMPLES:
+
+        sage: from sage_periods.diagonal import diagonal_series_terms
+        sage: A = PolynomialRing(QQ, ['x', 'y']); x, y = A.gens()
+        sage: diagonal_series_terms(A.one(), 1-x-y, [1, 1], 4)
+        [1, 2, 6, 20]
     """
     d = P.parent().ngens()
     assert len(r) == d, "r must have same length as number of generators of P and Q."

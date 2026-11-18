@@ -31,9 +31,12 @@ class ProfileData:
     * ``syzlms`` -- ``frozenset`` of leading monomial exponents of the staircase
       lifts which contributed a pivot.
 
-    This class should be compatible with both the polynomial-based reduction
-    algorithm used in ``rham_koszul.py`` and the linear coefficient-based
-    version of ``linear_closure.py``.
+    EXAMPLES:
+
+        sage: from sage_periods.profiling import ProfileData
+        sage: profile = ProfileData()
+        sage: profile.state
+        'disabled'
     """
     state: str = "disabled"
     # Most recent candidate; we arm when the next candidate agrees with it.
@@ -50,7 +53,20 @@ class ProfileData:
     # ...just test a certain randomly generated small subset of the entries?
 
     def reset(self):
-        r"""Reset ``ProfileData`` object to its initial state, in place."""
+        r"""Reset profile to its initial state in place.
+
+        OUTPUT:
+
+        * ``None``.
+
+        TESTS:
+
+            sage: from sage_periods.profiling import ProfileData
+            sage: profile = ProfileData(state='recording')
+            sage: profile.reset()
+            sage: profile.state
+            'disabled'
+        """
         self.state = "disabled"
         self.prev_prof = None
         self.prof_prime = None
@@ -59,7 +75,24 @@ class ProfileData:
         self.syzlms = frozenset()
 
     def copy_from(self, other):
-        r"""Overwrite this profile, in place, with the contents of ``other``."""
+        r"""Overwrite profile in place with content of ``other``.
+
+        INPUT:
+
+        * ``other`` -- A ``ProfileData`` instance.
+
+        OUTPUT:
+
+        * ``None``.
+
+        TESTS:
+
+            sage: from sage_periods.profiling import ProfileData
+            sage: source = ProfileData(state='recording'); target = ProfileData()
+            sage: target.copy_from(source)
+            sage: target.state
+            'recording'
+        """
         self.state = other.state
         self.prev_prof = other.prev_prof
         self.prof_prime = other.prof_prime
@@ -75,6 +108,25 @@ class ProfileData:
         it agrees with the previous candidate.
 
         Similar in spirit to ``recon_add_rat``.
+
+        INPUT:
+
+        * ``profile`` -- Candidate ``(tsyzlms, syzgen_lms, syzlms)`` tuple.
+        * ``prime`` -- Prime at which candidate was computed.
+
+        OUTPUT:
+
+        * ``None``; this record may advance to ``"armed"``.
+
+        TESTS:
+
+            sage: from sage_periods.profiling import ProfileData
+            sage: P = ProfileData(state='recording')
+            sage: candidate = ((), (), frozenset())
+            sage: P.add_profile_candidate(candidate, 7)
+            sage: P.add_profile_candidate(candidate, 7)
+            sage: (P.state, P.prof_prime)
+            ('armed', 7)
         """
         if self.state != "recording":
             return

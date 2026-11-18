@@ -18,7 +18,7 @@ from sage.misc.reset import reset
 # from .rham_koszul import RhamKoszulData, gauss_manin_helper
 from .diagonal import minimize_diagonal_annihilator, diagonal_to_period, normalize_diagonal_arguments
 from .preparation import compute_homogenization, compute_prepared_fraction, minimize_denominator_degree, probe_reduction_order
-from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, prepare_coefficient_data
+from .pipeline import compute_gauss_manin_connection, compute_reductions_dependency, _prepare_coefficient_data
 from .reconstruction import (CRTLifter, operator_residues, operator_from_lift,
                              operator_residue_count, ratfun_residues,
                              ratfuns_from_lift, reconstruction_degree_hint)
@@ -385,7 +385,7 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
     # and start at whichever produces the operator of smaller order, 
     # if both execution times are under 30 seconds.
     # Else, pick whichever one is faster.
-    coefficient_data = prepare_coefficient_data(a, f)
+    coefficient_data = _prepare_coefficient_data(a, f)
     seed = {}
     degree_hint = None
     profile = ProfileData()
@@ -591,13 +591,13 @@ def compute_period_annihilator(R, t, Dt,reduction_order = None, certify = False,
 
 
 def _operator_from_coefficients(Alg, Dt, L_coeffs):
-    """Operator c_{m-1} Dt^{m-1} - sum_{k<m-1} c_k Dt^k from the Stage-2 relation."""
+    r"""Operator c_{m-1} Dt^{m-1} - sum_{k<m-1} c_k Dt^k from the Stage-2 relation."""
     m = len(L_coeffs)
     return Alg(L_coeffs[m-1]*Dt**(m-1) - sum([L_coeffs[k]*(Dt**k) for k in range(m-1)]))
 
 
 def _assemble_certificate(a, f, Alg, Dt, lift_result):
-    """Build the operator and its ``PeriodCertificate`` from a certified Stage-3 lift."""
+    r"""Build the operator and its ``PeriodCertificate`` from a certified Stage-3 lift."""
     L_coeffs, lifted_cert_entries, basis_sig, supports = lift_result
     # Build operator
     deq = _operator_from_coefficients(Alg, Dt, L_coeffs)

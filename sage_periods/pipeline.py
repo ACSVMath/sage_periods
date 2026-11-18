@@ -16,8 +16,8 @@ from .errors import BadPrimeError, ReductionOrderTooSmallError
 
 from sage.misc.verbose import verbose, set_verbose
 
-def prepare_coefficient_data(a, f):
-    """Immutable characteristic-zero tables for f, fdelta, and a."""
+def _prepare_coefficient_data(a, f):
+    r"""Immutable characteristic-zero tables for f, fdelta, and a."""
     def table(coefficients):
         return tuple((e, c.numerator(), c.denominator())
                      for e, c in coefficients if c)
@@ -51,7 +51,7 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
     * ``staircase_keys`` -- (Optional) A set containing staircase cache keys 
         used by a probe, updated throughout the computation.
     * ``coefficient_data`` -- (Optional) Coefficient tables prepared by
-      ``prepare_coefficient_data(a, f)`` for reuse across primes.
+      ``_prepare_coefficient_data(a, f)`` for reuse across primes.
     * ``certify`` -- (Optional) If ``True``, also reconstruct reduction cofactors.
 
     OUTPUT: 
@@ -95,7 +95,7 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
     H.first_tick = degree_hint
 
     if coefficient_data is None:
-        coefficient_data = prepare_coefficient_data(a, f)
+        coefficient_data = _prepare_coefficient_data(a, f)
 
     def _build_coefficient_table(source):
         """Reduce the fixed coefficient data modulo this prime."""
@@ -217,10 +217,11 @@ def compute_gauss_manin_connection(a,f,r,p,profile=None,degree_hint=None,stairca
         # Else, continue.
 
 def _extend_echelon(basis, row):
-    """Add a finite-field row if independent; inputs are left unchanged.
+    r"""Add a finite-field row to ``basis`` if independent.
 
     Rows stay in discovery order. Each is zero at all earlier pivots, so
     eliminating in that order never reintroduces an already cleared pivot.
+    Editing of ``basis`` is in-place, ``row`` is unchanged.
     """
     for pivot, previous in basis:
         if row[pivot]:
